@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://shaders/water.gdshader" id="1_pgo6a"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_pgo6a")
+shader_parameter/shallow_tint = null
+shader_parameter/deep_color = null
+shader_parameter/foam_color = null
+shader_parameter/absorption = null
+shader_parameter/refraction = null
+shader_parameter/flow = null
+shader_parameter/pixel_density = null
