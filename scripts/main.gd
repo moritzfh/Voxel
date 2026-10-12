@@ -600,6 +600,17 @@ func _parse_args() -> void:
 			Net.player_name = a.substr(7)
 		elif a == "--host":
 			Net.host(Net.player_name)
+		elif a == "--mpmenu":
+			get_tree().create_timer(0.5).timeout.connect(func():
+				hud.toggle_menu(true)
+				hud._show_mp(true))
+		elif a.begins_with("--broker="):
+			Net.broker_override = a.substr(9)
+		elif a == "--host-online":
+			Net.host_online(Net.player_name)
+		elif a.begins_with("--join-code="):
+			var jc := a.substr(12)
+			get_tree().create_timer(1.0).timeout.connect(func(): Net.join_code(jc, Net.player_name))
 		elif a.begins_with("--join="):
 			var addr := a.substr(7)
 			# join once the world runs smoothly (after the first frames)

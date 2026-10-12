@@ -58,7 +58,10 @@ func _ready() -> void:
 	_build_chat()
 	_build_menu()
 	Net.chat_received.connect(add_chat)
-	Net.status_changed.connect(func(t): if mp_status: mp_status.text = t)
+	Net.status_changed.connect(func(t):
+		if mp_status:
+			mp_status.text = t
+		_refresh_mp())
 	Net.roster_changed.connect(_refresh_mp)
 	Net.lan_list_changed.connect(_refresh_mp)
 
@@ -578,6 +581,7 @@ var mp_status: Label
 var mp_lan: VBoxContainer
 var mp_players: Label
 var mp_leave: Button
+var mp_code: Label
 
 func _mp_button(text: String, pos: Vector2, w: float, cb: Callable, parent: Control) -> Button:
 	var b := Button.new()
@@ -625,59 +629,74 @@ func _mp_edit(pos: Vector2, w: float, placeholder: String, parent: Control) -> L
 func _build_mp_panel() -> void:
 	mp_panel = Control.new()
 	mp_panel.set_anchors_preset(Control.PRESET_CENTER)
-	mp_panel.offset_left = -260
-	mp_panel.offset_top = -300
-	mp_panel.size = Vector2(520, 600)
+	mp_panel.offset_left = -270
+	mp_panel.offset_top = -330
+	mp_panel.size = Vector2(540, 660)
 	mp_panel.visible = false
 	menu.add_child(mp_panel)
 	var p := _panel(mp_panel, Rect2(Vector2.ZERO, mp_panel.size))
 	p.mouse_filter = Control.MOUSE_FILTER_PASS
 	var t := _label("Mehrspieler", f_title, 30)
-	t.size = Vector2(520, 50)
+	t.size = Vector2(540, 50)
 	t.position = Vector2(0, 16)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	p.add_child(t)
 	var l1 := _label("Dein Name", f_head, 18, CREAM_DIM)
 	l1.position = Vector2(36, 70)
 	p.add_child(l1)
-	mp_name = _mp_edit(Vector2(36, 96), 448, "Name", p)
+	mp_name = _mp_edit(Vector2(36, 96), 468, "Name", p)
 	mp_name.text = Net.player_name
 	mp_name.max_length = 16
-	_mp_button("Spiel hosten", Vector2(36, 150), 448, func():
-		if Net.host(mp_name.text):
+	_mp_button("Online hosten (Code für Freunde)", Vector2(36, 150), 468, func():
+		if Net.host_online(mp_name.text):
 			get_tree().paused = false
 			_refresh_mp(), p)
-	var l2 := _label("Beitreten (IP-Adresse des Hosts)", f_head, 18, CREAM_DIM)
-	l2.position = Vector2(36, 204)
+	var l2 := _label("Beitreten: Code eingeben (oder IP im Heimnetz)", f_head, 18, CREAM_DIM)
+	l2.position = Vector2(36, 206)
 	p.add_child(l2)
-	mp_ip = _mp_edit(Vector2(36, 230), 300, "z. B. 192.168.0.23", p)
+	mp_ip = _mp_edit(Vector2(36, 232), 320, "z. B. K7P2QA", p)
 	mp_ip.text_submitted.connect(func(_t): _join_from_field())
-	_mp_button("Beitreten", Vector2(346, 230), 138, _join_from_field, p)
+	_mp_button("Beitreten", Vector2(366, 232), 138, _join_from_field, p)
+	mp_code = _label("", f_title, 34, Color(1.0, 0.86, 0.5))
+	mp_code.position = Vector2(36, 284)
+	mp_code.size = Vector2(468, 46)
+	mp_code.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	p.add_child(mp_code)
 	var l3 := _label("Spiele im Heimnetz", f_head, 18, CREAM_DIM)
-	l3.position = Vector2(36, 284)
+	l3.position = Vector2(36, 336)
 	p.add_child(l3)
 	mp_lan = VBoxContainer.new()
-	mp_lan.position = Vector2(36, 310)
-	mp_lan.size = Vector2(448, 90)
+	mp_lan.position = Vector2(36, 362)
+	mp_lan.size = Vector2(468, 76)
 	mp_lan.add_theme_constant_override("separation", 4)
 	p.add_child(mp_lan)
 	mp_players = _label("", f_body, 17, CREAM)
-	mp_players.position = Vector2(36, 404)
-	mp_players.size = Vector2(448, 50)
+	mp_players.position = Vector2(36, 442)
+	mp_players.size = Vector2(468, 50)
 	mp_players.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	p.add_child(mp_players)
 	mp_status = _label(Net.status, f_body, 16, Color(0.95, 0.85, 0.6))
-	mp_status.position = Vector2(36, 456)
-	mp_status.size = Vector2(448, 50)
+	mp_status.position = Vector2(36, 494)
+	mp_status.size = Vector2(468, 56)
 	mp_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	p.add_child(mp_status)
-	mp_leave = _mp_button("Trennen", Vector2(36, 532), 214, func():
+	_mp_button("Im Heimnetz hosten (ohne Code)", Vector2(36, 556), 468, func():
+		if Net.host(mp_name.text):
+			get_tree().paused = false
+			_refresh_mp(), p).add_theme_font_size_override("font_size", 16)
+	mp_leave = _mp_button("Trennen", Vector2(36, 604), 226, func():
 		Net.leave()
 		_refresh_mp(), p)
-	_mp_button("Zurück", Vector2(270, 532), 214, func(): _show_mp(false), p)
+	_mp_button("Zurück", Vector2(278, 604), 226, func(): _show_mp(false), p)
 
 func _join_from_field() -> void:
-	if Net.join(mp_ip.text, mp_name.text):
+	var t := mp_ip.text.strip_edges()
+	var ok := false
+	if t.count(".") >= 1 or t.count(":") >= 1:
+		ok = Net.join(t, mp_name.text)
+	else:
+		ok = Net.join_code(t, mp_name.text)
+	if ok:
 		get_tree().paused = false
 	_refresh_mp()
 
@@ -718,8 +737,9 @@ func _refresh_mp() -> void:
 			names.append(str(Net.players[id]["name"]) + (" (Host)" if id == 1 else ""))
 		mp_players.text = "Im Spiel (%d/%d): %s" % [Net.players.size(), Net.MAX_PLAYERS, ", ".join(names)]
 	else:
-		mp_players.text = "Nicht verbunden. Hosten oder einer IP beitreten (UDP-Port %d)." % Net.PORT
-	mp_leave.disabled = not Net.active()
+		mp_players.text = "Nicht verbunden. „Online hosten“ gibt dir einen Code, den deine Freunde hier eintippen."
+	mp_leave.disabled = not Net.active() and Net.online_code == ""
+	mp_code.text = ("Code: " + Net.online_code) if Net.online_code != "" and Net.is_host() else ""
 
 # ---------------------------------------------------------------- chat
 var chat_open := false

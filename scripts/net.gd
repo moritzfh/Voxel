@@ -1,5 +1,6 @@
 extends Node
-## Multiplayer (autoload "Net"): ENet host/join, LAN discovery, UPnP port mapping, player roster, chat.
+## Multiplayer (autoload "Net"): online play by code (MQTT relay, no port forwarding), direct ENet host/join by IP,
+## LAN discovery, UPnP port mapping, player roster, chat.
 ## Every peer simulates its own hero and sends its state ~20x per second; the host relays it to the others.
 
 signal status_changed(text: String)
@@ -13,6 +14,10 @@ const PORT := 7777
 const DISCOVERY_PORT := 7778
 const MAX_PLAYERS := 8
 const GAME_ID := "gruenweiten-1"
+const MQTT_PEER := preload("res://scripts/mqtt_peer.gd")
+# public MQTT brokers used only as a mailbox between the players (secure WebSocket); the last letter of a code says which
+const BROKERS := ["wss://broker.emqx.io:8084/mqtt", "wss://broker.hivemq.com:8884/mqtt", "wss://test.mosquitto.org:8081/mqtt"]
+const CODE_CHARS := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const COLORS := [Color(0.93, 0.45, 0.13), Color(0.20, 0.55, 0.95), Color(0.30, 0.78, 0.30), Color(0.85, 0.22, 0.30),
 	Color(0.62, 0.36, 0.86), Color(0.95, 0.80, 0.20), Color(0.15, 0.80, 0.78), Color(0.95, 0.50, 0.70)]
 
@@ -21,7 +26,11 @@ var players := {}          # peer id -> {"name": String, "color": int}
 var lan_hosts := {}        # ip -> {"name": String, "players": int, "t": float}
 var status := ""
 var public_ip := ""
-var _peer: ENetMultiplayerPeer
+var _peer: MultiplayerPeer
+var online_code := ""      # set while hosting / joined by code
+var broker_override := ""  # --broker=ws://... (tests)
+var _broker_idx := 0
+var _broker_msg := ""
 var _bcast: PacketPeerUDP
 var _listen: PacketPeerUDP
 var _bcast_t := 0.0
@@ -66,8 +75,9 @@ func _set_status(t: String) -> void:
 func host(name: String) -> bool:
 	leave(true)
 	player_name = _clean_name(name)
-	_peer = ENetMultiplayerPeer.new()
-	var err := _peer.create_server(PORT, MAX_PLAYERS - 1)
+	var ep := ENetMultiplayerPeer.new()
+	_peer = ep
+	var err := ep.create_server(PORT, MAX_PLAYERS - 1)
 	if err != OK:
 		_peer = null
 		_set_status("Hosten fehlgeschlagen (Port %d belegt?)" % PORT)
@@ -91,18 +101,81 @@ func join(address: String, name: String) -> bool:
 	if address == "":
 		_set_status("Bitte eine IP-Adresse eingeben.")
 		return false
-	_peer = ENetMultiplayerPeer.new()
-	var err := _peer.create_client(address, port)
+	var ep := ENetMultiplayerPeer.new()
+	_peer = ep
+	var err := ep.create_client(address, port)
 	if err != OK:
 		_peer = null
 		_set_status("Verbindung fehlgeschlagen.")
 		return false
 	multiplayer.multiplayer_peer = _peer
 	# generous timeouts: a hitch while loading or compiling shaders must not drop the connection
-	_peer.get_peer(1).set_timeout(32, 20000, 45000)
+	(_peer as ENetMultiplayerPeer).get_peer(1).set_timeout(32, 20000, 45000)
 	_join_timeout = 25.0
 	_set_status("Verbinde mit %s …" % address)
 	return true
+
+## Online by code: no router setup needed. The host gets a short code, friends type it in.
+func host_online(name: String, broker_idx := 0) -> bool:
+	leave(true)
+	player_name = _clean_name(name)
+	_broker_idx = clampi(broker_idx, 0, BROKERS.size() - 1)
+	var c := ""
+	for i in 5:
+		c += CODE_CHARS[randi() % CODE_CHARS.length()]
+	c += CODE_CHARS[_broker_idx]
+	_start_mqtt(c, true)
+	players = {1: {"name": player_name, "color": 0}}
+	roster_changed.emit()
+	_set_status("Verbinde mit dem Vermittlungsdienst …")
+	return true
+
+func join_code(c: String, name: String) -> bool:
+	leave(true)
+	player_name = _clean_name(name)
+	c = c.strip_edges().to_upper().replace(" ", "").replace("-", "")
+	if c.length() != 6:
+		_set_status("Der Code hat 6 Zeichen.")
+		return false
+	_broker_idx = maxi(0, CODE_CHARS.find(c[5])) % BROKERS.size()
+	_start_mqtt(c, false)
+	_set_status("Suche Spiel %s …" % c)
+	return true
+
+func _start_mqtt(c: String, as_host: bool) -> void:
+	online_code = c
+	_broker_msg = ""
+	var url: String = broker_override if broker_override != "" else BROKERS[_broker_idx]
+	var mp = MQTT_PEER.new(url, c, as_host)
+	mp.max_clients = MAX_PLAYERS - 1
+	mp.raw_received.connect(_on_raw)
+	mp.broker_status.connect(_on_broker_status.bind(as_host))
+	_peer = mp
+	multiplayer.multiplayer_peer = mp
+
+func _on_broker_status(text: String, as_host: bool) -> void:
+	if text == "online":
+		DisplayServer.clipboard_set(online_code)
+		_set_status("Online! Code: %s  (in die Zwischenablage kopiert – an Freunde schicken)" % online_code)
+		chat_received.emit("", "Online-Spiel offen. Code: %s" % online_code, Color(1.0, 0.85, 0.45))
+		return
+	_broker_msg = text
+	if as_host and not active() and broker_override == "" and _broker_idx + 1 < BROKERS.size():
+		# this mailbox is down: try the next one (gives a new code)
+		var nxt := _broker_idx + 1
+		call_deferred("host_online", player_name, nxt)
+		return
+	_set_status(text)
+
+func is_online_mode() -> bool:
+	return _peer != null and _peer.get_script() == MQTT_PEER
+
+func _on_raw(from: int, data: PackedByteArray) -> void:
+	if not players.has(from) or from == my_id():
+		return
+	var v = bytes_to_var(data)
+	if v is Array and v.size() == 5:
+		player_state.emit(from, {"pos": v[0], "yaw": v[1], "vel": v[2], "flags": v[3], "attack": v[4]})
 
 func leave(silent := false) -> void:
 	_stop_broadcast()
@@ -118,6 +191,7 @@ func leave(silent := false) -> void:
 		_peer = null
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	players = {}
+	online_code = ""
 	_join_timeout = 0.0
 	for id in ids:
 		if id != 1 or true:
@@ -228,8 +302,8 @@ func _process(delta: float) -> void:
 
 # ------------------------------------------------------------------ connection events
 func _on_peer_connected(id: int) -> void:
-	if is_host() and _peer.get_peer(id):
-		_peer.get_peer(id).set_timeout(32, 20000, 45000)
+	if is_host() and _peer is ENetMultiplayerPeer and (_peer as ENetMultiplayerPeer).get_peer(id):
+		(_peer as ENetMultiplayerPeer).get_peer(id).set_timeout(32, 20000, 45000)
 	if is_host():
 		_set_status("Spieler verbunden (%d/%d)" % [players.size() + 1, MAX_PLAYERS])
 
@@ -249,12 +323,13 @@ func _on_connected() -> void:
 	_register.rpc_id(1, player_name)
 
 func _on_failed() -> void:
+	var why := _broker_msg
 	leave(true)
-	_set_status("Verbindung fehlgeschlagen.")
+	_set_status(why if why != "" else "Verbindung fehlgeschlagen.")
 
 func _on_server_gone() -> void:
 	leave(true)
-	_set_status("Der Server hat das Spiel beendet.")
+	_set_status("Der Host hat das Spiel beendet.")
 	chat_received.emit("", "Verbindung zum Server getrennt.", Color(1, 0.6, 0.5))
 
 # ------------------------------------------------------------------ RPCs
@@ -290,6 +365,9 @@ func _roster(p: Dictionary) -> void:
 ## own hero state -> everybody (the host relays client packets)
 func send_state(pos: Vector3, yaw: float, vel: Vector3, flags: int, attack_n: int) -> void:
 	if not active():
+		return
+	if is_online_mode():
+		_peer.send_raw_all(var_to_bytes([pos, yaw, vel, flags, attack_n]))
 		return
 	_state.rpc(pos, yaw, vel, flags, attack_n)
 

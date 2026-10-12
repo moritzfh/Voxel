@@ -32,18 +32,19 @@ steigst du automatisch hoch, höhere kletterst du per Sprung.
 
 ## Mehrspieler (bis 8 Spieler)
 
-Esc → **Mehrspieler**. Name eintragen, dann:
+Esc → **Mehrspieler**, Name eintragen, dann:
 
-- **Spiel hosten:** Dein PC wird zum Server (UDP-Port **7777**). Beim ersten Mal fragt die Windows-Firewall –
-  „Zulassen“ für private Netzwerke (und öffentliche, wenn Freunde übers Internet kommen) anklicken.
-  Die Statuszeile zeigt deine LAN-IP und, falls der Router UPnP kann, auch deine Internet-IP.
-- **Beitreten:** IP des Hosts eintragen → „Beitreten“. Spiele im selben Heimnetz tauchen automatisch
-  unter „Spiele im Heimnetz“ auf, ein Klick reicht.
-- **Übers Internet:** Klappt automatisch, wenn der Router UPnP erlaubt. Sonst im Router UDP-Port 7777 an den Host-PC
-  weiterleiten, oder beide installieren ein virtuelles LAN wie **Tailscale**, **ZeroTier** oder **Radmin VPN**
-  und nehmen die dort angezeigte IP.
-- Jeder Spieler bekommt eine eigene Schalfarbe und ein Namensschild; auf der Minikarte sind die anderen als Punkte zu sehen.
-  Das Menü pausiert im Mehrspieler nicht. Aufträge und Kisten zählt jeder für sich.
+- **Online hosten (Code für Freunde):** Du bekommst einen 6-stelligen Code (z. B. `K7P2QA`). Er landet automatisch
+  in der Zwischenablage und steht auch im Chat. Den schickst du deinen Freunden.
+- **Beitreten:** Code ins Feld tippen → „Beitreten“. Fertig – kein Router, keine Portfreigabe, kein Account.
+- Technik: Die Spiele tauschen ihre Daten über einen öffentlichen MQTT-Vermittlungsdienst aus (EMQX, als Ausweich
+  HiveMQ / Mosquitto). Die Daten sind nicht verschlüsselt-privat – wer den Code kennt, könnte mitlesen. Für ein
+  Spiel unter Freunden egal.
+- **Heimnetz:** „Im Heimnetz hosten (ohne Code)“ läuft direkt über UDP-Port 7777. Spiele im selben Netz tauchen
+  automatisch unter „Spiele im Heimnetz“ auf; alternativ die IP ins Beitreten-Feld tippen. Beim ersten Mal fragt
+  die Windows-Firewall – „Zulassen“ klicken.
+- Jeder Spieler bekommt eine eigene Schalfarbe und ein Namensschild; auf der Minikarte sind die anderen als Punkte.
+  Das Menü pausiert im Mehrspieler nicht. Aufträge und Kisten zählt jeder für sich. **Enter** öffnet den Chat.
 
 ## Grafik & Leistung
 
@@ -83,4 +84,5 @@ godot --headless --path . --script res://bake/bake.gd
 Screenshot-Modus (wird zum Vergleich mit dem Konzeptbild benutzt):
 `godot --path . -- --shot=bild.png --frames=10 [--cam=x,z,yaw,pitch,abstand] [--nohud]`
 
-Mehrspieler direkt starten: `Gruenweiten.exe -- --name=Moritz --host` bzw. `-- --name=Gast --join=192.168.0.23`.
+Mehrspieler direkt starten: `Gruenweiten.exe -- --name=Moritz --host-online` bzw. `-- --name=Gast --join-code=K7P2QA`
+(Heimnetz: `--host` / `--join=192.168.0.23`).
