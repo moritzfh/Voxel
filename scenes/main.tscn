@@ -1,0 +1,131 @@
+[gd_scene load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Shader" path="res://shaders/sky.gdshader" id="2_sky"]
+[ext_resource type="PackedScene" path="res://generated/world.scn" id="3_world"]
+[ext_resource type="Script" path="res://scripts/player.gd" id="4_player"]
+[ext_resource type="PackedScene" path="res://generated/char_hero.scn" id="5_hero"]
+[ext_resource type="Script" path="res://scripts/character_anim.gd" id="6_anim"]
+[ext_resource type="Script" path="res://scripts/camera_rig.gd" id="7_rig"]
+[ext_resource type="Script" path="res://scripts/ui/hud.gd" id="8_hud"]
+
+[sub_resource type="ShaderMaterial" id="SkyMat"]
+shader = ExtResource("2_sky")
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("SkyMat")
+radiance_size = 2
+process_mode = 1
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+ambient_light_color = Color(0.72, 0.8, 0.95, 1)
+ambient_light_sky_contribution = 0.85
+ambient_light_energy = 1.1
+reflected_light_source = 2
+tonemap_mode = 4
+tonemap_exposure = 1.0
+tonemap_white = 6.0
+ssao_enabled = true
+ssao_radius = 1.4
+ssao_intensity = 1.8
+ssao_power = 1.4
+ssao_detail = 0.6
+ssao_light_affect = 0.15
+sdfgi_enabled = true
+sdfgi_use_occlusion = true
+sdfgi_bounce_feedback = 0.4
+sdfgi_cascades = 4
+sdfgi_min_cell_size = 0.25
+sdfgi_energy = 1.0
+glow_enabled = true
+glow_levels/1 = 0.0
+glow_levels/2 = 0.6
+glow_levels/3 = 1.0
+glow_levels/4 = 0.6
+glow_levels/5 = 0.3
+glow_intensity = 0.55
+glow_strength = 1.0
+glow_bloom = 0.04
+glow_blend_mode = 1
+glow_hdr_threshold = 1.1
+fog_enabled = true
+fog_mode = 0
+fog_light_color = Color(0.68, 0.8, 0.95, 1)
+fog_light_energy = 1.0
+fog_sun_scatter = 0.25
+fog_density = 0.00016
+fog_aerial_perspective = 0.18
+fog_sky_affect = 0.0
+fog_height = 60.0
+fog_height_density = 0.0
+volumetric_fog_enabled = false
+adjustment_enabled = true
+adjustment_brightness = 1.0
+adjustment_contrast = 1.12
+adjustment_saturation = 1.24
+
+[sub_resource type="CameraAttributesPractical" id="CamAttr"]
+dof_blur_far_enabled = true
+dof_blur_far_distance = 450.0
+dof_blur_far_transition = 900.0
+dof_blur_amount = 0.006
+
+[sub_resource type="CapsuleShape3D" id="Capsule"]
+radius = 0.32
+height = 1.8
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+camera_attributes = SubResource("CamAttr")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.606914, 0.573007, -0.550744, 0, 0.692962, 0.720974, 0.794768, -0.437569, 0.420568, 0, 50, 0)
+light_color = Color(1, 0.9, 0.74, 1)
+light_energy = 1.8
+light_angular_distance = 0.6
+shadow_enabled = true
+shadow_bias = 0.03
+shadow_normal_bias = 1.2
+shadow_blur = 1.2
+directional_shadow_mode = 2
+directional_shadow_split_1 = 0.06
+directional_shadow_split_2 = 0.18
+directional_shadow_split_3 = 0.45
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 260.0
+directional_shadow_pancake_size = 40.0
+
+[node name="World" parent="." instance=ExtResource("3_world")]
+
+[node name="Player" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, 0)
+script = ExtResource("4_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+shape = SubResource("Capsule")
+
+[node name="Model" parent="Player" instance=ExtResource("5_hero")]
+script = ExtResource("6_anim")
+
+[node name="CameraRig" type="Node3D" parent="."]
+script = ExtResource("7_rig")
+
+[node name="SpringArm3D" type="SpringArm3D" parent="CameraRig"]
+spring_length = 4.6
+margin = 0.25
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig/SpringArm3D"]
+fov = 62.0
+near = 0.05
+far = 5000.0
+current = true
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("8_hud")
