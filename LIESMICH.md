@@ -22,6 +22,7 @@ Beim ersten Öffnen importiert Godot die Assets, das dauert ein paar Sekunden.
 | Sprechen / Kiste / Runenstein | E | Y / Dreieck |
 | Abbauen / Schwertschlag | linke Maustaste halten (oder 1) | X / Viereck oder R2 |
 | Baumodus an/aus | B | – |
+| Ego-Perspektive an/aus | H (oder ganz reinzoomen) | – |
 | Inventar · Talente · Journal · Karte | I · T · J · M | – |
 | Manatrank / Essen | 2 / G | Steuerkreuz |
 | Menü (Pause, Speichern, Laden, Grafik) | Esc | Options/Start |

@@ -116,7 +116,10 @@ func _physics_process(delta: float) -> void:
 
 	# face the movement direction
 	var hv := Vector2(velocity.x, velocity.z)
-	if hv.length() > 0.3:
+	if cam_rig and cam_rig.first_person:
+		# first person: the body always looks where the camera looks (shadow, other players)
+		_facing = lerp_angle(_facing, cam_rig.yaw, 1.0 - exp(-20.0 * delta))
+	elif hv.length() > 0.3:
 		var target_yaw := atan2(-velocity.x, -velocity.z)
 		_facing = lerp_angle(_facing, target_yaw, 1.0 - exp(-12.0 * delta))
 	if model:

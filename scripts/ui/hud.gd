@@ -407,7 +407,7 @@ func _build_hotbar() -> void:
 			k.add_child(kl)
 
 func _build_key_hints() -> void:
-	var items := [["I", "Inventar"], ["J", "Journal"], ["T", "Talente"], ["M", "Karte"], ["B", "Bauen"], ["Esc", "Menü"]]
+	var items := [["I", "Inventar"], ["J", "Journal"], ["T", "Talente"], ["M", "Karte"], ["B", "Bauen"], ["H", "Ego-Sicht"], ["Esc", "Menü"]]
 	var box := _anchored(Control.PRESET_CENTER_BOTTOM, Rect2(0, 16, 640, 30))
 	var x := 0.0
 	for i in items.size():

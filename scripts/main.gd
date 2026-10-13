@@ -825,6 +825,11 @@ func _parse_args() -> void:
 				_load()
 				print("[save] loaded, modified chunks ", vworld.modified.size(), " gold ", Game.count("gold"), " bp ", Game.blueprints.size())
 				get_tree().quit())
+		elif a == "--fp":
+			get_tree().create_timer(0.3).timeout.connect(func():
+				cam_rig.set_first_person(true)
+				tools.test_tool = "spitzhacke"
+				get_tree().create_timer(1.0).timeout.connect(cam_rig.swing))
 		elif a == "--bxshow":
 			get_tree().create_timer(0.5).timeout.connect(_bx_show)
 		elif a.begins_with("--bxshow-at="):

@@ -18,8 +18,11 @@ func _ready() -> void:
 			parts[c.name] = c
 			rest[c.name] = c.position
 
+signal swung
+
 func attack() -> void:
 	_attack = 0.0
+	swung.emit()
 
 func talk(seconds: float = 2.0) -> void:
 	_talk = seconds

@@ -32,6 +32,7 @@ var _tool_kind := ""
 var _tool_tier := 0
 var _tool_meshes := {}
 var _treasures: Array = []
+var test_tool := ""           # screenshots: tool to show while the mouse is not captured
 
 func setup(p_main: Node) -> void:
 	main = p_main
@@ -86,7 +87,7 @@ func _process(delta: float) -> void:
 		highlight.visible = false
 		if not (main.builder and main.builder.active):
 			hud.set_target_info("", Color.WHITE, false)
-		_show_tool("hammer" if main.builder and main.builder.active else "")
+		_show_tool("hammer" if main.builder and main.builder.active else test_tool)
 		if _ore_mmi:
 			_ore_mmi.visible = false
 		return
@@ -456,12 +457,14 @@ func _show_tool(kind: String) -> void:
 	_tool_tier = Game.tool_tier
 	if kind == "":
 		tool_mesh.visible = false
+		cam_rig.set_viewmodel(null)
 		return
 	var key := "%s_%d" % [kind, _tool_tier]
 	if not _tool_meshes.has(key):
 		_tool_meshes[key] = _build_tool(kind, _tool_tier)
 	tool_mesh.mesh = _tool_meshes[key]
 	tool_mesh.visible = true
+	cam_rig.set_viewmodel(tool_mesh.mesh)
 
 func _build_tool(kind: String, tier: int) -> Mesh:
 	var o: VoxelObject = vworld.new_object()
