@@ -14,6 +14,7 @@ var target: Node3D
 var yaw := 0.0
 var pitch := deg_to_rad(-4.0)
 var _dist := 4.6
+var shake := 0.0
 @onready var arm: SpringArm3D = $SpringArm3D
 @onready var camera: Camera3D = $SpringArm3D/Camera3D
 
@@ -71,6 +72,16 @@ func _process(delta: float) -> void:
 	rotation = Vector3(pitch, yaw, 0.0)
 	_dist = lerp(_dist, distance, 1.0 - exp(-8.0 * delta))
 	arm.spring_length = _dist
+	if shake > 0.001:
+		shake = maxf(0.0, shake - delta * 2.5)
+		camera.h_offset = randf_range(-1.0, 1.0) * shake * 0.08
+		camera.v_offset = randf_range(-1.0, 1.0) * shake * 0.08
+	else:
+		camera.h_offset = 0.0
+		camera.v_offset = 0.0
+
+func add_shake(a: float) -> void:
+	shake = minf(1.0, shake + a)
 
 func heading_degrees() -> float:
 	# 0 = north (-Z), 90 = east (+X)

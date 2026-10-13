@@ -1,0 +1,12 @@
+[configuration]
+
+entry_symbol = "voxelcore_init"
+compatibility_minimum = "4.7"
+reloadable = false
+
+[libraries]
+
+linux.debug.x86_64 = "res://bin/libvoxelcore.linux.template_debug.x86_64.so"
+linux.release.x86_64 = "res://bin/libvoxelcore.linux.template_release.x86_64.so"
+windows.debug.x86_64 = "res://bin/libvoxelcore.windows.template_debug.x86_64.dll"
+windows.release.x86_64 = "res://bin/libvoxelcore.windows.template_release.x86_64.dll"

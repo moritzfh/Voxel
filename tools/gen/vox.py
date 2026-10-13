@@ -27,6 +27,13 @@ CLOUD = 53
 GOLD = 54
 MOSS = 55
 SKIN = 56
+ORE_COPPER = 57
+ORE_IRON = 58
+CRYSTAL = 59
+GLASS = 60
+BRICK_RED = 61
+CLAY = 62
+CLOTH_YELLOW = 63
 HOLE_V = 255
 
 # id -> (name, [4 sRGB colours], emission per variant, roughness, jitter)
@@ -87,7 +94,47 @@ MATERIALS = {
     GOLD: ('gold', ['#d4a53c', '#c39530', '#e6ba50', '#a87a22'], 0, 0.35, 0.04),
     MOSS: ('moss', ['#5e9a3a', '#528a32', '#6aa843', '#46782a'], 0, 0.95, 0.08),
     SKIN: ('skin', ['#e9b996', '#e3b08c', '#f0c4a4', '#c99474'], 0, 0.8, 0.02),
+    ORE_COPPER: ('ore_copper', ['#8a8682', '#7b7773', '#d0803f', '#a8622e'], [0, 0, 0.12, 0.0], 0.7, 0.06),
+    ORE_IRON: ('ore_iron', ['#86817e', '#77716f', '#c08a70', '#8f5c47'], 0, 0.7, 0.06),
+    CRYSTAL: ('crystal', ['#5fe3d6', '#3cc9c4', '#9ff5ee', '#2fa9b5'], [0.9, 0.7, 1.4, 0.5], 0.15, 0.05),
+    GLASS: ('glass', ['#a9d4e8', '#9ccbe0', '#c4e6f4', '#86b8cf'], [0.06, 0.05, 0.08, 0.04], 0.06, 0.02),
+    BRICK_RED: ('brick_red', ['#a5462f', '#8f3c28', '#b8553a', '#d2c8b8'], 0, 0.9, 0.05),
+    CLAY: ('clay', ['#b88a63', '#a77c57', '#c79a72', '#966c4b'], 0, 0.95, 0.06),
+    CLOTH_YELLOW: ('cloth_y', ['#e5c13d', '#d4b030', '#f0d05a', '#bf9824'], 0, 0.95, 0.03),
 }
+
+# mining: hardness class (0 plants .. 5 crystal/metal) and the resource a voxel yields
+HARD = {}
+RES = {}
+for _m in (PLANT_GREEN, FLOWER_WHITE, FLOWER_YELLOW, FLOWER_RED, FLOWER_BLUE, FLOWER_PURPLE, WHEAT, FLOWER_CENTER, REED, LILY,
+           C.PINE_LEAVES, C.PINE_LEAVES_LIGHT, C.OAK_LEAVES, C.HAY):
+    HARD[_m], RES[_m] = 0, 'laub'
+for _m in (C.CLOTH_WHITE, C.CLOTH_BLUE, C.CLOTH_GREEN, C.CLOTH_RED, C.BANNER, CLOTH_YELLOW):
+    HARD[_m], RES[_m] = 0, 'stoff'
+for _m in (C.SNOW, C.SNOW_FULL):
+    HARD[_m], RES[_m] = 0, 'erde'
+for _m in (C.GRASS, C.DIRT, C.PATH, MOSS, C.GRASS_CLIFF, C.GRASS_SLOPE):
+    HARD[_m], RES[_m] = 1, 'erde'
+for _m in (C.SAND, C.GRAVEL, C.RIVERBED):
+    HARD[_m], RES[_m] = 1, 'sand'
+HARD[CLAY], RES[CLAY] = 1, 'lehm'
+for _m in (C.LOG, C.TIMBER, C.PLANKS, C.PLANKS_DARK, C.CRATE):
+    HARD[_m], RES[_m] = 2, 'holz'
+for _m in (C.STONE, C.CLIFF, C.BOULDER, C.BOULDER_MOSS, C.PEBBLE, C.COBBLE, C.COBBLE_MOSSY, C.BRICKS, C.BRICKS_DARK,
+           C.SLATE, C.PLASTER):
+    HARD[_m], RES[_m] = 3, 'stein'
+HARD[BRICK_RED], RES[BRICK_RED] = 3, 'ziegel'
+HARD[ORE_COPPER], RES[ORE_COPPER] = 3, 'kupfer'
+for _m in (C.WINDOW_LIT, C.WINDOW_DARK, GLASS):
+    HARD[_m], RES[_m] = 2, 'glas'
+HARD[C.MOUNTAIN_ROCK], RES[C.MOUNTAIN_ROCK] = 4, 'stein'
+HARD[ORE_IRON], RES[ORE_IRON] = 4, 'eisen'
+HARD[C.IRON], RES[C.IRON] = 4, 'eisen'
+HARD[C.LANTERN], RES[C.LANTERN] = 2, 'kristall'
+HARD[CRYSTAL], RES[CRYSTAL] = 5, 'kristall'
+HARD[GOLD], RES[GOLD] = 5, 'gold'
+HARD[SKIN], RES[SKIN] = 0, ''
+
 # materials that are pure aliases for colour purposes
 ALIAS = {C.GRASS_CLIFF: C.GRASS, C.GRASS_SLOPE: C.GRASS, C.SNOW_FULL: C.SNOW}
 
@@ -321,6 +368,15 @@ def paint_value(m, x, y, z, vs, top_exposed, detail):
                 var = 2
     elif m == C.WATER or m == C.WATER_FALL:
         var = 0
+    elif m == ORE_COPPER or m == ORE_IRON:
+        var = ihash(x // cell2, y // cell2, z // cell2, 171) % 2
+        if hfrac(x, y, z, 172) < 0.45:
+            var = 2 + (ihash(x, y, z, 173) & 1)
+    elif m == CRYSTAL:
+        var = ihash(x, y, z, 181) % 4
+    elif m == BRICK_RED:
+        row, blk = brick_block(x, y, z, vs)
+        var = ihash(row, blk, 0, 191) % 3
     elif m == CLOUD:
         var = 3 if y <= 1 else (2 if y <= 2 else (1 if y <= 4 else 0))
         if top_exposed:

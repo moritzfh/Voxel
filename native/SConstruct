@@ -1,0 +1,9 @@
+#!/usr/bin/env python
+import os
+env = SConscript("/home/claude/godotengine/godot-cpp/SConstruct")
+env.Append(CPPPATH=["src/"])
+env.Append(CXXFLAGS=["-O2"] if env["platform"] != "windows" or env.get("use_mingw") else [])
+sources = Glob("src/*.cpp")
+suffix = env["suffix"]  # e.g. .linux.template_debug.x86_64
+lib = env.SharedLibrary("../bin/libvoxelcore{}{}".format(suffix, env["SHLIBSUFFIX"]), source=sources)
+Default(lib)

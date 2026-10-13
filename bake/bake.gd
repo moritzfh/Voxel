@@ -43,6 +43,9 @@ func _init() -> void:
 		build_characters()
 	if manifest.has("water_map"):
 		var wm: Dictionary = manifest["water_map"]
+		for fn in ["near_vox.bin", "models_vox.bin"]:
+			if FileAccess.file_exists(src_dir + fn):
+				DirAccess.copy_absolute(src_dir + fn, ProjectSettings.globalize_path(OUT_DIR + fn))
 		var img := Image.create_from_data(int(wm["w"]), int(wm["h"]), false, Image.FORMAT_RF, slice(wm["buf"]))
 		ResourceSaver.save(img, OUT_DIR + "water_level.res", ResourceSaver.FLAG_COMPRESS)
 	# split the world into several sub-scenes (each < 24 MB, so files stay easy to move around)
@@ -71,7 +74,7 @@ func _init() -> void:
 		var wmeta: Dictionary = manifest["water_map"].duplicate()
 		wmeta.erase("buf")
 		manifest["water_meta"] = wmeta
-	for k in ["markers", "bounds", "minimap", "water_meta"]:
+	for k in ["markers", "bounds", "minimap", "water_meta", "near_vox", "models_vox", "materials"]:
 		if manifest.has(k):
 			extra[k] = manifest[k]
 	var f := FileAccess.open(OUT_DIR + "world_data.json", FileAccess.WRITE)
@@ -201,11 +204,22 @@ func build_fine(holder: Node3D, info: Dictionary, vmat: Material, wmat: Material
 					mi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 				holder.add_child(mi)
 				n += 1
+		if ent.has("scol"):
+			var sbs := StaticBody3D.new()
+			sbs.name = cname + "_sc"
+			sbs.set_meta("terrain", true)
+			var css := CollisionShape3D.new()
+			var shs := ConcavePolygonShape3D.new()
+			shs.set_faces(slice(ent["scol"]).to_vector3_array())
+			css.shape = shs
+			sbs.add_child(css)
+			holder.add_child(sbs)
 		if not ent.has("hm"):
 			continue
 		# ground collision: height map in fine voxel units
 		var sb := StaticBody3D.new()
 		sb.name = cname + "_hm"
+		sb.set_meta("terrain", true)
 		var hs := HeightMapShape3D.new()
 		var sz := int(ent["hm_size"])
 		hs.map_width = sz
@@ -298,13 +312,19 @@ func build_trees(root: Node3D, vmat: Material) -> void:
 	var cb := StaticBody3D.new()
 	cb.name = "TreeColliders"
 	holder.add_child(cb)
+	var ti := 0
 	for c in info["colliders"]:
 		var cs := CollisionShape3D.new()
+		cs.name = "tree_%d" % ti
+		ti += 1
 		var sh := CylinderShape3D.new()
 		sh.radius = float(c[3])
 		sh.height = 6.0
 		cs.shape = sh
 		cs.position = Vector3(float(c[0]), float(c[1]) + 3.0, float(c[2]))
+		if c.size() > 4:
+			cs.set_meta("tree", {"mesh": c[4], "chunk": c[5], "index": int(c[6]), "pos": [float(c[0]), float(c[1]), float(c[2])],
+				"yaw": float(c[7]), "scale": float(c[8])})
 		cb.add_child(cs)
 	print("bake: tree multimeshes ", n)
 
@@ -407,7 +427,29 @@ func build_rocks(root: Node3D, vmat: Material) -> void:
 				mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 			holder.add_child(mmi)
 			n += 1
-	print("bake: rock multimeshes ", n)
+	var block := StaticBody3D.new()
+	block.name = "RockColliders"
+	holder.add_child(block)
+	var picks := StaticBody3D.new()
+	picks.name = "RockPicks"
+	picks.collision_layer = 2
+	picks.collision_mask = 0
+	holder.add_child(picks)
+	var ri := 0
+	for it in info.get("items", []):
+		var cs := CollisionShape3D.new()
+		cs.name = "rock_%d" % ri
+		ri += 1
+		var bs := BoxShape3D.new()
+		var big: bool = it[11]
+		bs.size = Vector3(float(it[8]) * (0.85 if big else 0.9), float(it[9]) * (1.0 if big else 0.9), float(it[10]) * (0.85 if big else 0.9))
+		cs.shape = bs
+		cs.position = Vector3(float(it[0]), float(it[1]) + float(it[9]) * 0.5, float(it[2]))
+		cs.rotation.y = float(it[3])
+		cs.set_meta("rock", {"mesh": it[5], "chunk": it[6], "index": int(it[7]), "pos": [float(it[0]), float(it[1]), float(it[2])],
+			"yaw": float(it[3]), "scale": float(it[4])})
+		(block if big else picks).add_child(cs)
+	print("bake: rock multimeshes ", n, " rock colliders ", ri)
 
 func build_clouds(root: Node3D, cmat: Material) -> void:
 	var info: Dictionary = manifest["clouds"]

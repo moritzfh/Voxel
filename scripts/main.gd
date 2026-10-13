@@ -5,6 +5,14 @@ extends Node3D
 
 const NPC_SCRIPT := preload("res://scripts/npc.gd")
 const REMOTE_SCRIPT := preload("res://scripts/remote_player.gd")
+const VOXEL_WORLD := preload("res://scripts/voxel/voxel_world.gd")
+const TOOLS := preload("res://scripts/game/tools.gd")
+const BUILDER := preload("res://scripts/game/builder.gd")
+const GAME_PANELS := preload("res://scripts/ui/game_panels.gd")
+const GHOST_SHADER := preload("res://shaders/voxel_ghost.gdshader")
+const XRAY_SHADER := preload("res://shaders/voxel_xray.gdshader")
+## quest "Der Wachturm": a glowing outline of a round tower by the river that the player fills with voxels
+const BUILD_SITE := [18.0, 0.0, 2.0]
 
 @onready var player: CharacterBody3D = $Player
 @onready var cam_rig: Node3D = $CameraRig
@@ -21,6 +29,19 @@ var _frame := 0
 var _t0 := 0
 var _current: Variant = null
 var remotes := {}            # peer id -> remote hero node
+var vworld: Node3D           # editable voxel terrain
+var tools: Node              # mining / chopping
+var builder: Node            # build mode
+var panels: Control          # inventory / crafting / talents / journal / map
+var world_data := {}
+var build_site: Array = []   # [x, y, z] of the tower outline (world), empty when unused
+var _site_obj: VoxelObject
+var _site_at := Vector3i.ZERO
+var _site_node: Node3D
+var _bq_t := 0.0
+var _snap := {}              # incoming world snapshot parts (late join)
+var _bx_origin := Vector2(-18, 28)
+var _bx_ui := ""
 var _net_t := 0.0
 var _mp_test := 0.0
 var _mp_log_t := 0.0
@@ -48,6 +69,34 @@ func _ready() -> void:
 	# let the physics server register the world colliders before ray casting
 	await get_tree().physics_frame
 	await get_tree().physics_frame
+	world_data = data
+	vworld = Node3D.new()
+	vworld.name = "VoxelWorld"
+	vworld.set_script(VOXEL_WORLD)
+	add_child(vworld)
+	vworld.setup($World, data)
+	tools = Node.new()
+	tools.name = "Tools"
+	tools.set_script(TOOLS)
+	add_child(tools)
+	tools.setup(self)
+	builder = Node.new()
+	builder.name = "Builder"
+	builder.set_script(BUILDER)
+	add_child(builder)
+	builder.setup(self)
+	panels = Control.new()
+	panels.name = "Panels"
+	panels.set_script(GAME_PANELS)
+	hud.root.add_child(panels)
+	panels.setup(self)
+	_spawn_runes(data.get("markers", {}))
+	_setup_build_site()
+	Net.op_received.connect(_on_net_op)
+	Net.player_joined.connect(_send_snapshot)
+	Game.quests_changed.connect(hud.refresh_quests)
+	Game.quests_changed.connect(_update_build_site)
+	hud.refresh_quests()
 	if data.has("water_meta") and ResourceLoader.exists("res://generated/water_level.res"):
 		player.water_img = load("res://generated/water_level.res")
 		player.water_meta = data["water_meta"]
@@ -313,6 +362,7 @@ func _process(delta: float) -> void:
 			c.get_child(2).position.y = 1.35 + sin(Time.get_ticks_msec() / 400.0) * 0.08
 	_perf_tick(delta)
 	_net_tick(delta)
+	_build_quest_tick(delta)
 	_screenshot_tick()
 
 # ------------------------------------------------------------------ multiplayer
@@ -347,6 +397,11 @@ func _net_tick(delta: float) -> void:
 			print("[mptest] done")
 			Net.leave(true)
 			get_tree().quit()
+
+## world edits are sent to the other players as small deterministic operations
+func net_op(op: Dictionary) -> void:
+	if Net.active():
+		Net.send_op(op)
 
 func _sync_remotes() -> void:
 	var me := Net.my_id()
@@ -383,6 +438,9 @@ func _remove_remote(id: int) -> void:
 		remotes.erase(id)
 
 func _interact(it: Dictionary) -> void:
+	if it["kind"] == "rune":
+		_touch_rune(it)
+		return
 	if it["kind"] == "npc":
 		it["node"].interact()
 	elif it["kind"] == "crate":
@@ -400,22 +458,36 @@ func _on_npc_talked(npc: Node) -> void:
 		hud.show_toast("Auftrag abgeschlossen: Ein neuer Anfang")
 
 # ------------------------------------------------------------------ save
+const SAVE_PATH := "user://spielstand.dat"
+
 func _save() -> void:
-	var s := {"pos": [player.global_position.x, player.global_position.y, player.global_position.z],
-		"crates": crates_found, "elder": elder_talked}
-	var f := FileAccess.open("user://savegame.json", FileAccess.WRITE)
+	var s := {"v": 2, "pos": [player.global_position.x, player.global_position.y, player.global_position.z],
+		"crates": crates_found, "elder": elder_talked, "game": Game.to_dict(), "world": vworld.save_state(),
+		"props": tools.save_props()}
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify(s))
+		f.store_var(s, false)
+		f.close()
 		hud.show_toast("Spiel gespeichert")
 
 func _load() -> void:
-	if not FileAccess.file_exists("user://savegame.json"):
+	var s: Variant = null
+	if FileAccess.file_exists(SAVE_PATH):
+		var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+		if f:
+			s = f.get_var(false)
+	elif FileAccess.file_exists("user://savegame.json"):
+		s = JSON.parse_string(FileAccess.get_file_as_string("user://savegame.json"))
+	if typeof(s) != TYPE_DICTIONARY:
 		hud.show_toast("Kein Spielstand vorhanden")
 		return
-	var s = JSON.parse_string(FileAccess.get_file_as_string("user://savegame.json"))
-	if typeof(s) != TYPE_DICTIONARY:
-		return
 	var p: Array = s.get("pos", [0, 0, 0])
+	if s.has("world"):
+		vworld.load_state(s["world"])
+	if s.has("props"):
+		tools.load_props(s["props"])
+	if s.has("game"):
+		Game.from_dict(s["game"])
 	player.global_position = Vector3(p[0], p[1] + 0.2, p[2])
 	player.velocity = Vector3.ZERO
 	cam_rig.global_position = player.global_position + Vector3(0, cam_rig.pivot_height, 0)
@@ -431,7 +503,157 @@ func _load() -> void:
 				to_hide -= 1
 		crates_found = found
 		hud.set_quest(1, "%d / 5 Kisten finden." % crates_found, crates_found >= 5)
+	for it in interactables:
+		if it["kind"] == "rune" and int(it["index"]) in Game.runes_found:
+			_rune_glow(it, false)
+	_update_build_site()
 	hud.show_toast("Spielstand geladen")
+
+# ------------------------------------------------------------------ runes
+func _spawn_runes(markers: Dictionary) -> void:
+	var runes: Array = markers.get("runes", [])
+	for i in runes.size():
+		var r: Array = runes[i]
+		var n := Node3D.new()
+		n.name = "Rune%d" % i
+		add_child(n)
+		n.global_position = Vector3(r[0], r[1] + 1.0, r[2])
+		var l := OmniLight3D.new()
+		l.light_color = Color(0.45, 0.7, 1.0)
+		l.light_energy = 0.0
+		l.omni_range = 5.0
+		l.position.y = 0.6
+		n.add_child(l)
+		interactables.append({"node": n, "kind": "rune", "index": i, "label": "[E] Runenstein berühren"})
+
+func _touch_rune(it: Dictionary) -> void:
+	var i: int = it["index"]
+	if i in Game.runes_found:
+		return
+	Game.runes_found.append(i)
+	Game.add_xp(120)
+	Game.notify.emit("Runenstein berührt (%d / 8)" % Game.runes_found.size(), Color(0.6, 0.8, 1.0))
+	Sfx.play("treasure", null, -4.0)
+	_rune_glow(it, true)
+	Game._check_quests()
+
+func _rune_glow(it: Dictionary, fx: bool) -> void:
+	var n: Node3D = it["node"]
+	it["label"] = "Runenstein (berührt)"
+	var l: OmniLight3D = n.get_child(0)
+	if fx:
+		var tw := create_tween()
+		tw.tween_property(l, "light_energy", 2.2, 0.6)
+		for k in 36:
+			tools.debris.spawn(n.global_position + Vector3(randf_range(-0.4, 0.4), randf_range(-0.6, 0.6), randf_range(-0.4, 0.4)), (59 << 2) | (k % 3), Vector3.UP, false, 0.9, 0.7)
+	else:
+		l.light_energy = 2.2
+
+# ------------------------------------------------------------------ build quest site
+func _setup_build_site() -> void:
+	var g := _ground(Vector3(BUILD_SITE[0], 40.0, BUILD_SITE[2]))
+	build_site = [g.x, g.y, g.z]
+	_site_obj = vworld.new_object()
+	_site_obj.fill_shape(2, Vector3i(32, 48, 32), {"hollow": true, "thick": 3, "open_top": true, "crenel": 4}, 4 << 2)
+	var c: Vector3i = vworld.to_voxel(g)
+	_site_at = Vector3i(c.x - 16, c.y + 1, c.z - 16)
+	_site_node = Node3D.new()
+	_site_node.name = "BuildSite"
+	add_child(_site_node)
+	var gm := ShaderMaterial.new()
+	gm.shader = GHOST_SHADER
+	var vm := vworld.vmat as ShaderMaterial
+	for prm in ["palette", "emission_tab", "roughness_tab", "jitter_tab"]:
+		gm.set_shader_parameter(prm, vm.get_shader_parameter(prm))
+	gm.set_shader_parameter("tint", Color(1.0, 0.82, 0.35))
+	gm.set_shader_parameter("solid_colors", false)
+	gm.set_shader_parameter("alpha", 0.28)
+	gm.set_shader_parameter("tint_mix", 0.8)
+	gm.set_shader_parameter("height", 6.0)
+	var xm := ShaderMaterial.new()
+	xm.shader = XRAY_SHADER
+	xm.set_shader_parameter("tint", Color(1.0, 0.82, 0.35))
+	xm.set_shader_parameter("strength", 0.08)
+	gm.next_pass = xm
+	var mi := MeshInstance3D.new()
+	mi.mesh = vworld.array_mesh(_site_obj.mesh(0, false, Vector3.ZERO), gm)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_site_node.add_child(mi)
+	_site_node.global_position = vworld.to_world(_site_at)
+	var lbl := Label3D.new()
+	lbl.text = "Wachturm\nfülle den Umriss mit Voxeln"
+	lbl.font = load("res://assets/fonts/alegreya-latin-700-normal.woff2")
+	lbl.font_size = 64
+	lbl.pixel_size = 0.008
+	lbl.outline_size = 14
+	lbl.modulate = Color(1.0, 0.9, 0.6)
+	lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	lbl.position = Vector3(2.0, 7.2, 2.0)
+	_site_node.add_child(lbl)
+	_update_build_site()
+
+func _update_build_site() -> void:
+	if _site_node == null:
+		return
+	var on: bool = Game.quests.has("wachturm") and Game.quests["wachturm"]["state"] == "active"
+	_site_node.visible = on
+
+func _build_quest_tick(delta: float) -> void:
+	if _site_node == null or not _site_node.visible:
+		return
+	_bq_t -= delta
+	if _bq_t > 0.0:
+		return
+	_bq_t = 1.0
+	var total := _site_obj.solid_count()
+	var have: int = vworld.vol.count_overlap(_site_obj, _site_at)
+	var prog := float(have) / float(maxi(1, total))
+	if absf(prog - Game.build_quest_progress) > 0.004:
+		Game.build_quest_progress = prog
+		Game._check_quests()
+
+# ------------------------------------------------------------------ multiplayer world sync
+func _on_net_op(_from: int, op: Dictionary) -> void:
+	match str(op.get("op", "")):
+		"carve":
+			var r: Dictionary = vworld.carve(op["at"], op["n"], int(op["c"]), int(op["h"]), int(op["s"]), float(op["j"]))
+			var removed: PackedInt32Array = r.get("removed", PackedInt32Array())
+			if not removed.is_empty():
+				tools.debris.burst_voxels(removed, vworld, Vector3(op["n"]), false, 18)
+				Sfx.play("dig", vworld.to_world(op["at"]), -4.0)
+		"prop":
+			var po: Node = tools.get_prop(op["k"], op["meta"], null)
+			if po:
+				tools.apply_prop_hit(po, op["p"], op["f"], int(op["pw"]), int(op["s"]), int(op["h"]), false)
+		"obj", "chg":
+			builder.apply_remote(op)
+			print_verbose("[net] build op ", op["op"])
+		"snap":
+			_snap[int(op["i"])] = op["d"]
+			if _snap.size() >= int(op["n"]):
+				var all := PackedByteArray()
+				for k in int(op["n"]):
+					all.append_array(_snap[k])
+				_snap = {}
+				var d: Variant = bytes_to_var(all.decompress(int(op["raw"]), FileAccess.COMPRESSION_ZSTD))
+				if d is Dictionary:
+					print("[snap] world chunks %d, props %d" % [(d.get("w", {}) as Dictionary).size(), (d.get("p", []) as Array).size()])
+					vworld.load_state(d.get("w", {}))
+					tools.load_props(d.get("p", []))
+					hud.show_toast("Welt vom Host übernommen", 2.0)
+
+## the host sends a new player everything that changed (terrain chunks, felled trees, mined rocks)
+func _send_snapshot(id: int) -> void:
+	var w: Dictionary = vworld.save_state()
+	var pr: Array = tools.save_props()
+	if w.is_empty() and pr.is_empty():
+		return
+	var raw := var_to_bytes({"w": w, "p": pr})
+	var comp := raw.compress(FileAccess.COMPRESSION_ZSTD)
+	var part := 48000
+	var n := (comp.size() + part - 1) / part
+	for k in n:
+		Net.send_op_to(id, {"op": "snap", "i": k, "n": n, "raw": raw.size(), "d": comp.slice(k * part, mini(comp.size(), (k + 1) * part))})
 
 # ------------------------------------------------------------------ graphics presets
 const FOV_CAPS := [110.0, 125.0, 179.0]
@@ -583,6 +805,35 @@ func _parse_args() -> void:
 			player.model.rotation.y = cam_rig.yaw
 			player._facing = cam_rig.yaw
 			cam_rig.global_position = player.global_position + Vector3(0, cam_rig.pivot_height, 0)
+		elif a == "--vxtest":
+			get_tree().create_timer(0.5).timeout.connect(_vx_test)
+		elif a == "--bxtest":
+			get_tree().create_timer(0.5).timeout.connect(_bx_test)
+		elif a.begins_with("--quest="):
+			var qid := a.substr(8)
+			get_tree().create_timer(0.3).timeout.connect(func():
+				Game.start_quest(qid)
+				Game.quests_changed.emit())
+		elif a == "--savetest":
+			get_tree().create_timer(4.0).timeout.connect(func():
+				Game.add("gold", 77)
+				_save()
+				print("[save] saved, modified chunks ", vworld.modified.size())
+				get_tree().quit())
+		elif a == "--loadtest":
+			get_tree().create_timer(1.0).timeout.connect(func():
+				_load()
+				print("[save] loaded, modified chunks ", vworld.modified.size(), " gold ", Game.count("gold"), " bp ", Game.blueprints.size())
+				get_tree().quit())
+		elif a == "--bxshow":
+			get_tree().create_timer(0.5).timeout.connect(_bx_show)
+		elif a.begins_with("--bxshow-at="):
+			get_tree().create_timer(float(a.substr(12))).timeout.connect(_bx_show)
+		elif a.begins_with("--bxorigin="):
+			var bo := a.substr(11).split(",")
+			_bx_origin = Vector2(float(bo[0]), float(bo[1]))
+		elif a.begins_with("--bxui="):
+			_bx_ui = a.substr(7)
 		elif a == "--stats":
 			_stats_mode = true
 		elif a == "--nohud":
@@ -672,6 +923,41 @@ func _stats_tick() -> bool:
 	_stats_cur = null
 	return true
 
+func _vx_test() -> void:
+	# scripted mining / chopping test (headless): dig in front of the spawn, fell the nearest tree
+	var p := player.global_position + Vector3(0, 0, -5)
+	var hit: Dictionary = vworld.voxel_ray(p + Vector3(0, 4, 0), Vector3.DOWN, 20.0)
+	print("[vx] ground ", hit.get("voxel"), " value ", hit.get("value"))
+	for i in 8:
+		var h: Dictionary = vworld.voxel_ray(p + Vector3(0, 4, 0), Vector3.DOWN, 20.0)
+		tools._mine_voxel({"kind": "voxel", "voxel": h["voxel"], "normal": h["normal"], "value": int(h["value"]), "point": h["point"], "from": p + Vector3(0, 4, 0)})
+	print("[vx] inv after digging ", Game.inv, " xp ", Game.xp, " lvl ", Game.level, " live ms ", vworld._stats)
+	var best: CollisionShape3D = null
+	var bd := 1e9
+	for cs in $World.find_children("tree_*", "CollisionShape3D", true, false):
+		var d := (cs as Node3D).global_position.distance_to(player.global_position)
+		if d < bd and cs.has_meta("tree"):
+			bd = d
+			best = cs
+	print("[vx] nearest tree ", best.get_meta("tree") if best else null, " at ", bd)
+	if best:
+		var m: Dictionary = best.get_meta("tree")
+		var tp := Vector3(m["pos"][0], m["pos"][1], m["pos"][2])
+		for i in 30:
+			var po: Node = tools.get_prop("tree", m, best)
+			if po.felled:
+				print("[vx] felled after ", i, " hits")
+				break
+			var from := tp + Vector3(2.5, 1.2, 0.3)
+			tools._cd = 0.0
+			tools.target = {"kind": "tree", "prop": po, "point": tp + Vector3(0.25, 1.0, 0.0), "from": from}
+			tools._hit_prop(tools.target)
+	await get_tree().create_timer(6.0).timeout
+	var logs := get_tree().get_nodes_in_group("logs")
+	print("[vx] after fall: inv ", Game.inv, " trees ", Game.trees_felled, " bodies ", get_children().filter(func(c): return c is RigidBody3D).size())
+	if _shot_path == "":
+		get_tree().quit()
+
 func _screenshot_tick() -> void:
 	if _shot_path == "":
 		return
@@ -691,3 +977,148 @@ func _screenshot_tick() -> void:
 			RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_OBJECTS_IN_FRAME),
 			RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED) / 1048576])
 		get_tree().quit()
+
+# ------------------------------------------------------------------ build test (headless or with --shot)
+func _bx_aim(x: float, z: float) -> Dictionary:
+	var h: Dictionary = vworld.voxel_ray(Vector3(x, 60.0, z), Vector3.DOWN, 120.0)
+	return {"voxel": h["voxel"], "normal": h["normal"], "point": h["point"], "value": int(h["value"])}
+
+func _bx_place(label: String, shape: String, variant: int, size: Vector3i, x: float, z: float, op := 0, drag_to := Vector2.INF) -> void:
+	var b := builder
+	for i in b.SHAPES.size():
+		if b.SHAPES[i]["id"] == shape:
+			b.shape_i = i
+	b.bp_i = -1
+	b.variants[shape] = variant
+	b.sizes[shape] = size
+	b.aim = _bx_aim(x, z)
+	b._place_key = ""
+	var t0 := Time.get_ticks_usec()
+	if drag_to != Vector2.INF:
+		var n: Vector3i = b.aim["normal"]
+		var base: Vector3i = b.aim["voxel"] + n if op == 0 else b.aim["voxel"]
+		var cur: Vector3i = vworld.to_voxel(Vector3(drag_to.x, 0, drag_to.y))
+		cur.y = base.y
+		b.dragging = 1 if op != 1 else 2
+		b.drag = {"base": base, "n": n, "cur": base, "op": op}
+		b.test_cur = cur
+	else:
+		var n2: Vector3i = b.aim["normal"]
+		var base2: Vector3i = b.aim["voxel"] + n2 if op == 0 else b.aim["voxel"]
+		b.dragging = 1 if op != 1 else 2
+		b.drag = {"base": base2, "n": n2, "cur": base2, "op": op}
+		b.test_cur = base2
+	b._compute(true)
+	var p: Dictionary = b.place
+	var t1 := Time.get_ticks_usec()
+	b._commit()
+	var t2 := Time.get_ticks_usec()
+	b.dragging = 0
+	b.drag = {}
+	print("[bx] %-22s valid=%s count=%d cost=%s ext=%s reason=%s  compute %.1f ms commit %.1f ms" % [label, p.get("valid"), int(p.get("count", 0)),
+		str(p.get("cost", {})), str(p.get("ext")), p.get("reason", ""), (t1 - t0) / 1000.0, (t2 - t1) / 1000.0])
+
+func _bx_test() -> void:
+	var b := builder
+	b.test_mode = true
+	b.set_active(true)
+	Game.talents = {"formen1": 1, "formen2": 1, "formen3": 1, "pinsel": 1}
+	Game.add_many({"stein": 30000, "holz": 20000, "ziegel": 6000, "glas": 3000, "erde": 8000, "stoff": 2000})
+	var o := _ground(Vector3(_bx_origin.x, 30, _bx_origin.y))
+	print("[bx] origin ", o)
+	b.mat = vworld.mat_ids["cobble"]
+	b.mat2 = vworld.mat_ids["slate"]
+	_bx_place("haus", "haus", 0, Vector3i(48, 22, 40), o.x - 12.0, o.z - 10.0)
+	b.mat = vworld.mat_ids["plaster"]
+	b.mat2 = vworld.mat_ids["brick_red"]
+	_bx_place("haus pult drag", "haus", 1, Vector3i(40, 20, 32), o.x - 20.0, o.z - 4.0, 0, Vector2(o.x - 15.0, o.z + 1.0))
+	b.mat = vworld.mat_ids["bricks"]
+	_bx_place("raum drag", "raum", 1, Vector3i(40, 20, 32), o.x - 4.0, o.z - 16.0, 0, Vector2(o.x + 1.0, o.z - 12.0))
+	b.mat = vworld.mat_ids["bricks_dark"]
+	_bx_place("wehrturm", "turm", 2, Vector3i(32, 56, 32), o.x - 8.0, o.z + 4.0)
+	b.mat = vworld.mat_ids["cobble_mossy"]
+	_bx_place("zinnenwand drag", "wand", 1, Vector3i(32, 20, 3), o.x - 2.0, o.z - 4.0, 0, Vector2(o.x + 6.0, o.z - 4.0))
+	b.mat = vworld.mat_ids["planks"]
+	_bx_place("treppe", "treppe", 0, Vector3i(12, 16, 24), o.x + 3.0, o.z + 2.0)
+	b.mat = vworld.mat_ids["slate"]
+	_bx_place("kuppel", "kugel", 1, Vector3i(24, 12, 24), o.x - 14.0, o.z + 6.0)
+	b.mat = vworld.mat_ids["timber"]
+	_bx_place("torbogen", "wand", 2, Vector3i(40, 28, 4), o.x - 2.0, o.z + 8.0, 0, Vector2(o.x + 4.0, o.z + 8.0))
+	# cut a cellar entrance into the ground and paint the dome
+	_bx_place("abziehen quader", "quader", 0, Vector3i(12, 10, 12), o.x + 6.0, o.z - 8.0, 1)
+	b.mode = 1
+	b.mat = vworld.mat_ids["brick_red"]
+	_bx_place("faerben kuppel", "quader", 0, Vector3i(24, 16, 24), o.x - 14.0, o.z + 6.0, 2)
+	b.mode = 0
+	# brush strokes
+	b.mat = vworld.mat_ids["grass"]
+	for k in 6:
+		_bx_place("pinsel %d" % k, "pinsel", 0, Vector3i(10, 10, 10), o.x + 8.0 + k * 0.5, o.z + 6.0)
+	# copy the first house and paste it
+	b.mode = 2
+	b.aim = _bx_aim(o.x - 15.5, o.z - 13.0)
+	var n: Vector3i = b.aim["normal"]
+	b.dragging = 1
+	b.drag = {"base": b.aim["voxel"], "n": n, "cur": b.aim["voxel"], "op": 3}
+	b.test_cur = vworld.to_voxel(Vector3(o.x - 8.5, 0, o.z - 7.0))
+	b.test_cur.y = (b.aim["voxel"] as Vector3i).y
+	b.sizes["_sel"] = Vector3i(48, 64, 48)
+	b._place_key = ""
+	b._compute(true)
+	print("[bx] select ", b.place.get("lo"), " ", b.place.get("ext"))
+	b._commit()
+	b.dragging = 0
+	print("[bx] blueprints ", Game.blueprints.size(), " ", Game.blueprints[0]["size"] if Game.blueprints.size() > 0 else "")
+	b.mode = 0
+	if Game.blueprints.size() > 0:
+		b.bp_i = 0
+		b.aim = _bx_aim(o.x + 14.0, o.z - 12.0)
+		b._place_key = ""
+		b._compute(true)
+		print("[bx] bauplan place valid=%s count=%d cost=%s" % [b.place.get("valid"), int(b.place.get("count", 0)), str(b.place.get("cost"))])
+		b._commit()
+	print("[bx] undo stack ", b.undo_stack.size())
+	print("[bx] ui rect ", b.ui.get_rect(), " root ", hud.root.get_rect(), " bar ", b.ui.bar.get_rect(), " anchors ", b.ui.anchor_right, " ", b.ui.offset_right)
+	b.undo()
+	b.redo()
+	print("[bx] inv ", Game.inv)
+	print("[bx] stats ", Game.stats, " xp ", Game.xp, " lvl ", Game.level)
+	# leave a ghost visible for the screenshot
+	b.shape_i = 4
+	b.bp_i = -1
+	b.mat = vworld.mat_ids["planks_dark"]
+	b.mat2 = vworld.mat_ids["slate"]
+	b.aim = _bx_aim(o.x + 2.0, o.z - 2.0)
+	b._place_key = ""
+	if _bx_ui == "kit":
+		b.open_panel()
+	elif _bx_ui.begins_with("panel"):
+		b.set_active(false)
+		panels.open_tab(int(_bx_ui.substr(5)))
+	if _shot_path == "":
+		get_tree().quit()
+
+## a few finished buildings in the meadow west of the river (for screenshots)
+func _bx_show() -> void:
+	var b := builder
+	b.test_mode = true
+	b.set_active(true)
+	Game.creative = true
+	b.mat = vworld.mat_ids["cobble"]
+	b.mat2 = vworld.mat_ids["slate"]
+	b.pattern_sel = 0
+	_bx_place("haus", "haus", 0, Vector3i(48, 22, 40), -27.0, 29.0)
+	b.mat = vworld.mat_ids["plaster"]
+	b.mat2 = vworld.mat_ids["brick_red"]
+	_bx_place("haus pult", "haus", 1, Vector3i(40, 20, 32), -27.0, 37.5)
+	b.mat = vworld.mat_ids["bricks"]
+	_bx_place("turm", "turm", 2, Vector3i(28, 52, 28), -21.0, 24.0)
+	b.mat = vworld.mat_ids["cobble_mossy"]
+	_bx_place("mauer", "wand", 1, Vector3i(32, 14, 3), -22.0, 29.0, 0, Vector2(-22.0, 35.0))
+	b.mat = vworld.mat_ids["planks"]
+	_bx_place("boden", "boden", 0, Vector3i(24, 2, 24), -19.5, 33.0)
+	b.shape_i = 0
+	b.aim = {}
+	b.place = {}
+	b._hide_visuals()
+	b.set_active(false)

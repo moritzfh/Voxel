@@ -32,6 +32,12 @@ var toast: Label
 var toast_t := 0.0
 var portrait_vp: SubViewport
 var menu: Control
+var level_label: Label
+var xp_bar: Control
+var crosshair: Control
+var target_label: Label
+var feed: VBoxContainer
+var _feed_lines: Array = []
 var game_minutes := 16 * 60 + 24.0
 var _flash := {}
 
@@ -55,9 +61,16 @@ func _ready() -> void:
 	_build_hotbar()
 	_build_key_hints()
 	_build_prompt_toast()
+	_build_aim()
+	_build_feed()
 	_build_chat()
 	_build_menu()
 	Net.chat_received.connect(add_chat)
+	Game.notify.connect(add_feed)
+	Game.xp_changed.connect(func():
+		level_label.text = "Stufe %d" % Game.level
+		xp_bar.queue_redraw())
+	Game.leveled_up.connect(func(_l): Sfx.play("levelup", null, -4.0))
 	Net.status_changed.connect(func(t):
 		if mp_status:
 			mp_status.text = t
@@ -148,6 +161,17 @@ func _build_char_panel() -> void:
 	var lv := _label("Stufe 1", f_body, 19, CREAM_DIM)
 	lv.position = Vector2(155, 42)
 	p.add_child(lv)
+	level_label = lv
+	xp_bar = Control.new()
+	xp_bar.position = Vector2(232, 52)
+	xp_bar.size = Vector2(166, 8)
+	xp_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	xp_bar.draw.connect(func():
+		var f := clampf(float(Game.xp) / float(Game.xp_needed(Game.level)), 0.0, 1.0)
+		xp_bar.draw_rect(Rect2(Vector2.ZERO, xp_bar.size), Color(0.04, 0.07, 0.06, 0.9))
+		xp_bar.draw_rect(Rect2(Vector2(1, 1), Vector2((xp_bar.size.x - 2) * f, xp_bar.size.y - 2)), Color(0.55, 0.85, 0.4))
+		xp_bar.draw_rect(Rect2(Vector2.ZERO, xp_bar.size), Color(GOLD, 0.8), false, 1.0))
+	p.add_child(xp_bar)
 	var rows := [["res://assets/ui/icon_heart.png", Color(0.86, 0.13, 0.15)],
 		["res://assets/ui/icon_mana.png", Color(0.12, 0.42, 0.92)],
 		["res://assets/ui/icon_bolt.png", Color(0.92, 0.72, 0.12)]]
@@ -289,9 +313,7 @@ func _build_quests() -> void:
 	var t := _label("Aufträge", f_head, 23)
 	t.position = Vector2(56, 12)
 	p.add_child(t)
-	var quests := [["Ein neuer Anfang", "Mit dem Dorfältesten sprechen."],
-		["Verlorene Vorräte", "3 / 5 Kisten finden."],
-		["Waldruhe", "5 / 10 Waldtiere besiegen."]]
+	var quests := [["", ""], ["", ""], ["", ""]]
 	for i in quests.size():
 		var y := 48.0 + i * 60.0
 		var sep := Control.new()
@@ -321,19 +343,41 @@ func _build_quests() -> void:
 		p.add_child(qs)
 		quest_rows.append({"ring": ring, "title": qt, "sub": qs})
 
+## village quests (talk to the elder, find the crates); the adventure quests come from Game
+var village_quests := [["Ein neuer Anfang", "Mit dem Dorfältesten sprechen.", false],
+	["Verlorene Vorräte", "3 / 5 Kisten finden.", false]]
+
 func set_quest(i: int, sub: String, done: bool) -> void:
-	var q: Dictionary = quest_rows[i]
-	q["sub"].text = sub
-	q["ring"].set_meta("done", done)
-	q["ring"].queue_redraw()
-	if done:
-		q["title"].add_theme_color_override("font_color", Color(0.72, 0.9, 0.6))
+	village_quests[i][1] = sub
+	village_quests[i][2] = done
+	refresh_quests()
+
+## up to three rows: active adventure quests first, then open village quests, then finished ones
+func refresh_quests() -> void:
+	var rows := []
+	for id in Game.active_quests():
+		rows.append([Game.QUESTS[id]["title"], Game.quest_progress(id), false])
+	for v in village_quests:
+		if not v[2]:
+			rows.append(v)
+	for v in village_quests:
+		if v[2]:
+			rows.append(v)
+	for i in quest_rows.size():
+		var q: Dictionary = quest_rows[i]
+		var r: Array = rows[i] if i < rows.size() else ["", "", false]
+		q["title"].text = r[0]
+		q["sub"].text = r[1]
+		q["ring"].set_meta("done", r[2])
+		q["ring"].visible = r[0] != ""
+		q["ring"].queue_redraw()
+		q["title"].add_theme_color_override("font_color", Color(0.72, 0.9, 0.6) if r[2] else CREAM)
 
 # ---------------------------------------------------------------- hotbar + keys
 func _build_hotbar() -> void:
-	var slots := [["res://assets/ui/icon_sword.png", "1", ""], ["res://assets/ui/icon_potion.png", "2", "3"],
+	var slots := [["res://assets/ui/icon_pickaxe.png", "1", ""], ["res://assets/ui/icon_potion.png", "2", "3"],
 		["res://assets/ui/icon_sprint.png", "Q", ""], ["res://assets/ui/icon_glider.png", "F", ""],
-		["res://assets/ui/icon_meat.png", "G", "3"], ["", "", ""]]
+		["res://assets/ui/icon_meat.png", "G", "3"], ["res://assets/ui/icon_hammer.png", "B", ""]]
 	var sw := 80.0
 	var gap := 9.0
 	var total := slots.size() * sw + (slots.size() - 1) * gap
@@ -363,7 +407,7 @@ func _build_hotbar() -> void:
 			k.add_child(kl)
 
 func _build_key_hints() -> void:
-	var items := [["I", "Inventar"], ["J", "Journal"], ["T", "Talente"], ["M", "Karte"], ["Esc", "Menü"]]
+	var items := [["I", "Inventar"], ["J", "Journal"], ["T", "Talente"], ["M", "Karte"], ["B", "Bauen"], ["Esc", "Menü"]]
 	var box := _anchored(Control.PRESET_CENTER_BOTTOM, Rect2(0, 16, 640, 30))
 	var x := 0.0
 	for i in items.size():
@@ -560,6 +604,7 @@ func _process(delta: float) -> void:
 	var m := int(game_minutes) % (24 * 60)
 	clock_label.text = "%02d:%02d" % [m / 60, m % 60]
 	_chat_tick(delta)
+	_feed_tick(delta)
 	if toast_t > 0.0:
 		toast_t -= delta
 		toast.modulate.a = clamp(toast_t, 0.0, 1.0)
@@ -819,3 +864,88 @@ func _chat_tick(delta: float) -> void:
 		l["t"] += delta
 		var a := 1.0 if chat_open else clampf(1.0 - (float(l["t"]) - 10.0) / 2.0, 0.0, 1.0)
 		l["label"].modulate.a = a
+
+# ---------------------------------------------------------------- aim + pickup feed
+func _build_aim() -> void:
+	crosshair = Control.new()
+	crosshair.set_anchors_preset(Control.PRESET_CENTER)
+	crosshair.size = Vector2(24, 24)
+	crosshair.position = -crosshair.size * 0.5
+	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	crosshair.visible = false
+	crosshair.draw.connect(func():
+		var c := crosshair.size * 0.5
+		crosshair.draw_circle(c, 3.5, Color(0, 0, 0, 0.55))
+		crosshair.draw_circle(c, 2.2, Color(1, 1, 1, 0.95))
+		for d in [Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1)]:
+			crosshair.draw_line(c + d * 6.0, c + d * 10.0, Color(1, 1, 1, 0.8), 2.0))
+	root.add_child(crosshair)
+	target_label = _label("", f_head, 18)
+	target_label.set_anchors_preset(Control.PRESET_CENTER)
+	target_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	target_label.offset_left = -260
+	target_label.offset_right = 260
+	target_label.offset_top = 18
+	target_label.offset_bottom = 44
+	root.add_child(target_label)
+
+func set_target_info(text: String, color: Color, show_cross: bool) -> void:
+	if crosshair.visible != show_cross:
+		crosshair.visible = show_cross
+	if target_label.text != text:
+		target_label.text = text
+	target_label.add_theme_color_override("font_color", color)
+
+func _build_feed() -> void:
+	var box := Control.new()
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(box)
+	box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	box.offset_left = -312
+	box.offset_top = 556
+	box.size = Vector2(284, 220)
+	feed = VBoxContainer.new()
+	feed.size = Vector2(284, 220)
+	feed.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	feed.add_theme_constant_override("separation", 0)
+	box.add_child(feed)
+
+func add_feed(text: String, color: Color) -> void:
+	# merge repeated pickups of the same resource into one growing line
+	if text.begins_with("+") and not _feed_lines.is_empty():
+		var last: Dictionary = _feed_lines[-1]
+		var parts := text.split(" ", false, 1)
+		if last.get("res", "") == (parts[1] if parts.size() > 1 else "") and float(last["t"]) < 2.0:
+			last["n"] = int(last["n"]) + int(parts[0].substr(1))
+			last["label"].text = "+%d %s" % [last["n"], last["res"]]
+			last["t"] = 0.0
+			return
+	var l := _label(text, f_head, 20, color)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	l.custom_minimum_size = Vector2(284, 26)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	feed.add_child(l)
+	var e := {"label": l, "t": 0.0}
+	if text.begins_with("+"):
+		var parts2 := text.split(" ", false, 1)
+		e["res"] = parts2[1] if parts2.size() > 1 else ""
+		e["n"] = int(parts2[0].substr(1))
+	else:
+		e["t"] = -2.0
+	_feed_lines.append(e)
+	while _feed_lines.size() > 7:
+		_feed_lines[0]["label"].queue_free()
+		_feed_lines.pop_front()
+
+func _feed_tick(delta: float) -> void:
+	var i := 0
+	while i < _feed_lines.size():
+		var e: Dictionary = _feed_lines[i]
+		e["t"] = float(e["t"]) + delta
+		var a := clampf(3.2 - float(e["t"]), 0.0, 1.0)
+		e["label"].modulate.a = a
+		if a <= 0.0:
+			e["label"].queue_free()
+			_feed_lines.remove_at(i)
+			continue
+		i += 1

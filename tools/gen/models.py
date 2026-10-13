@@ -4,8 +4,11 @@ import common as C
 import mesher
 
 
+REGISTRY = {}   # name -> painted voxel grid + origin (voxels) for runtime voxel objects (chopping / mining)
+
+
 def mesh_model(vox, blocks=None, vs=0.125, uv_unit=None, origin=(0, 0, 0), use_ao=True, seed=0, paint_vs=None,
-               detail=None):
+               detail=None, register=None):
     """vox[x,y,z] material ids -> colour-voxel arrays with positions relative to origin (metres).
     The grid is padded with air so faces on the model's bounding box are not culled.
     The origin (in voxels) is rounded so the voxel grid stays aligned with model space (shader bevels)."""
@@ -17,6 +20,9 @@ def mesh_model(vox, blocks=None, vs=0.125, uv_unit=None, origin=(0, 0, 0), use_a
     enc = VX.paint_grid(v, seed * 7 + int(o_vox[0]), int(o_vox[1]), int(o_vox[2]), paint_vs or vs,
                         (vs <= 0.13) if detail is None else detail)
     tables = VX.mesher_tables()
+    if register:
+        REGISTRY[register] = {'data': np.ascontiguousarray(enc[1:-1, 1:, 1:-1]), 'origin': [int(v) for v in o_vox],
+                              'vs': float(vs)}
     return mesher.mesh_vox(enc, tables, vs, o, 0, X, 0, Z, use_ao=use_ao)
 
 

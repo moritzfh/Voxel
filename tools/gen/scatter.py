@@ -99,7 +99,8 @@ def build_tree_models(blocks=None):
         lods = []
         for lod, f in enumerate(TREE_LODS):
             v = vox if f == 1 else models.downsample(vox, f)
-            arr = models.mesh_model(v, None, flora.TV * f, origin=org, use_ao=(lod < 3), paint_vs=flora.TV, detail=(f == 1))
+            arr = models.mesh_model(v, None, flora.TV * f, origin=org, use_ao=(lod < 3), paint_vs=flora.TV, detail=(f == 1),
+                                    register=('tree_' + name) if f == 1 else None)
             lods.append(arr)
         meshes[name] = lods
         print('tree', name, vox.shape, [len(a['idx']) // 6 for a in lods])
@@ -248,16 +249,22 @@ def write_trees(groups, tree_meshes, manifest, writer):
                 buf = xform_rows(b[:, 0], b[:, 1], b[:, 2], b[:, 3], b[:, 4])
                 cx = float(np.floor(b[0, 0] / CH) * CH + CH / 2)
                 cz = float(np.floor(b[0, 2] / CH) * CH + CH / 2)
-                out['chunks'].append({'mesh': name, 'n': int(m.sum()), 'buf': writer.put(buf), 'center': [cx, cz], 'tier': t, 'size': CH})
-    # trunk colliders for trees in the playable area
+                out['chunks'].append({'mesh': name, 'n': int(m.sum()), 'buf': writer.put(buf), 'center': [cx, cz], 'tier': t, 'size': CH,
+                                      '_inst': [tuple(row) for row in b.tolist()]})
+    # trunk colliders for trees in the playable area: carry the instance identity for chopping
     cols = []
-    for name, inst in groups.items():
-        for (x, y, z, yaw, s) in inst:
-            if -96 < x < 96 and -160 < z < 48:
-                r = (0.35 if name.startswith('pine') and int(name[-1]) < 4 else 0.6) * s
-                if name.startswith('oak'):
-                    r = 0.35 * s
-                cols.append([float(x), float(y), float(z), float(r)])
+    for ch in out['chunks']:
+        if ch['tier'] != 0:
+            continue
+        name = ch['mesh']
+        for i, (x, y, z, yaw, sc) in enumerate(ch['_inst']):
+            r = (0.35 if name.startswith('pine') and int(name[-1]) < 4 else 0.6) * sc
+            if name.startswith('oak'):
+                r = 0.35 * sc
+            cols.append([float(x), float(y), float(z), float(r), name, '%s_%d_%d' % (name, int(ch['center'][0]), int(ch['center'][1])),
+                         i, float(yaw), float(sc)])
+    for ch in out['chunks']:
+        ch.pop('_inst', None)
     out['colliders'] = cols
     manifest['trees'] = out
     print('tree chunks', len(out['chunks']), 'colliders', len(cols))

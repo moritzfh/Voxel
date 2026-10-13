@@ -364,6 +364,7 @@ def main():
     pal, em, rough, jit = VX.shader_tables()
     manifest['palette'] = {'pal': pal.reshape(-1).tolist(), 'em': em.tolist(), 'rough': rough.tolist(),
                            'jit': jit.tolist()}
+    fine.VOX_OUT = os.path.join(OUT, 'near_vox.bin')
     fine.build_near(grids['near'], manifest, writer)
     fine.snap_props(grids['near'], manifest)
     fine.build_mid(grids['mid'], manifest, writer, holes['mid'])
@@ -381,6 +382,25 @@ def main():
     import character
     manifest['characters'] = character.build_characters(writer)
     build_clouds(manifest, writer)
+    # runtime voxel models (trees / rocks) + material table for mining and building
+    import models as MD
+    mf = open(os.path.join(OUT, 'models_vox.bin'), 'wb')
+    idx = {}
+    off = 0
+    import zlib
+    for name, m in MD.REGISTRY.items():
+        comp = zlib.compress(np.ascontiguousarray(m['data']).tobytes(), 6)
+        mf.write(comp)
+        idx[name] = {'off': off, 'size': len(comp), 'raw': int(m['data'].size), 'dims': list(m['data'].shape),
+                     'origin': m['origin'], 'vs': m['vs']}
+        off += len(comp)
+    mf.close()
+    manifest['models_vox'] = idx
+    mats = {}
+    for mid, (mname, cols, em, rough, jit) in VX.MATERIALS.items():
+        mats[str(mid)] = {'name': mname, 'hard': VX.HARD.get(mid, 255), 'res': VX.RES.get(mid, ''), 'color': cols[0]}
+    manifest['materials'] = mats
+    print('model voxels', len(idx), 'models,', off // 1024, 'KB')
     # water surface height map for the playable area (swimming)
     g = grids['near']
     fw = g.fine_water_h  # [x, z] at 0.125 m -> max per 0.5 m cell

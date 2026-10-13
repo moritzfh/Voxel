@@ -214,11 +214,71 @@ def arrow():
     return outline_shape(im, grow=12)
 
 
+def pickaxe():
+    im = canvas()
+    d = ImageDraw.Draw(im)
+    a = math.radians(-45)
+    poly(d, rot([(0.47, 0.22), (0.53, 0.22), (0.53, 0.90), (0.47, 0.90)], a), (122, 80, 44, 255))
+    poly(d, rot([(0.47, 0.22), (0.49, 0.22), (0.49, 0.90), (0.47, 0.90)], a), (150, 102, 58, 255))
+    head = [(0.12, 0.30), (0.30, 0.18), (0.5, 0.14), (0.70, 0.18), (0.88, 0.30), (0.70, 0.26), (0.5, 0.24), (0.30, 0.26)]
+    poly(d, rot(head, a), (170, 176, 186, 255))
+    poly(d, rot([(0.30, 0.18), (0.5, 0.14), (0.70, 0.18), (0.5, 0.19)], a), (220, 225, 232, 255))
+    poly(d, rot([(0.44, 0.13), (0.56, 0.13), (0.56, 0.27), (0.44, 0.27)], a), (110, 112, 118, 255))
+    return outline_shape(im)
+
+
+def hammer():
+    im = canvas()
+    d = ImageDraw.Draw(im)
+    a = math.radians(-40)
+    poly(d, rot([(0.47, 0.30), (0.53, 0.30), (0.53, 0.92), (0.47, 0.92)], a), (122, 80, 44, 255))
+    poly(d, rot([(0.26, 0.12), (0.74, 0.12), (0.74, 0.32), (0.26, 0.32)], a), (150, 156, 166, 255))
+    poly(d, rot([(0.26, 0.12), (0.74, 0.12), (0.74, 0.17), (0.26, 0.17)], a), (205, 210, 218, 255))
+    poly(d, rot([(0.20, 0.15), (0.26, 0.15), (0.26, 0.29), (0.20, 0.29)], a), (120, 124, 132, 255))
+    # voxel cubes being built
+    for (x, y, c) in ((0.66, 0.70, (212, 168, 92, 255)), (0.80, 0.70, (180, 130, 70, 255)), (0.73, 0.57, (230, 190, 110, 255))):
+        poly(d, [(x - 0.06, y - 0.06), (x + 0.06, y - 0.06), (x + 0.06, y + 0.06), (x - 0.06, y + 0.06)], c)
+    return outline_shape(im)
+
+
+def axe():
+    im = canvas()
+    d = ImageDraw.Draw(im)
+    a = math.radians(-45)
+    poly(d, rot([(0.47, 0.18), (0.53, 0.18), (0.53, 0.92), (0.47, 0.92)], a), (122, 80, 44, 255))
+    blade = [(0.53, 0.16), (0.80, 0.08), (0.86, 0.26), (0.80, 0.44), (0.53, 0.36)]
+    poly(d, rot(blade, a), (176, 182, 192, 255))
+    poly(d, rot([(0.80, 0.08), (0.86, 0.26), (0.80, 0.44), (0.83, 0.26)], a), (232, 236, 242, 255))
+    return outline_shape(im)
+
+
+def rune():
+    im = canvas()
+    d = ImageDraw.Draw(im)
+    poly(d, [(0.30, 0.90), (0.26, 0.30), (0.40, 0.10), (0.62, 0.12), (0.74, 0.30), (0.70, 0.90)], (126, 124, 120, 255))
+    poly(d, [(0.30, 0.90), (0.26, 0.30), (0.40, 0.10), (0.46, 0.12), (0.40, 0.32), (0.42, 0.90)], (150, 148, 144, 255))
+    for (x0, y0, x1, y1) in ((0.49, 0.26, 0.53, 0.70), (0.42, 0.40, 0.60, 0.44), (0.44, 0.58, 0.58, 0.62)):
+        d.rectangle([x0 * S, y0 * S, x1 * S, y1 * S], fill=(95, 227, 214, 255))
+    return outline_shape(im)
+
+
+def chest():
+    im = canvas()
+    d = ImageDraw.Draw(im)
+    poly(d, [(0.14, 0.42), (0.86, 0.42), (0.86, 0.86), (0.14, 0.86)], (150, 100, 56, 255))
+    poly(d, [(0.14, 0.24), (0.86, 0.24), (0.86, 0.44), (0.14, 0.44)], (178, 122, 68, 255))
+    for x in (0.14, 0.80):
+        poly(d, [(x, 0.24), (x + 0.06, 0.24), (x + 0.06, 0.86), (x, 0.86)], (230, 186, 80, 255))
+    poly(d, [(0.44, 0.40), (0.56, 0.40), (0.56, 0.54), (0.44, 0.54)], (230, 186, 80, 255))
+    return outline_shape(im)
+
+
 def build(out_dir):
     os.makedirs(out_dir, exist_ok=True)
     for name, fn in (('sword', sword), ('potion', potion), ('sprint', sprint), ('glider', glider), ('meat', meat),
                      ('heart', heart), ('mana', mana), ('bolt', bolt), ('floppy', floppy), ('book', book), ('sun', sun),
-                     ('house', house_icon), ('arrow', arrow)):
+                     ('house', house_icon), ('arrow', arrow), ('pickaxe', pickaxe), ('hammer', hammer), ('axe', axe),
+                     ('rune', rune), ('chest', chest)):
         save(fn(), os.path.join(out_dir, f'icon_{name}.png'))
 
 

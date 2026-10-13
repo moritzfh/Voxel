@@ -61,7 +61,7 @@ func _physics_process(delta: float) -> void:
 	sprinting = want_sprint and stamina > 0.5 and is_on_floor()
 	if want_sprint and moving and stamina > 0.5:
 		sprinting = true
-	var speed := sprint_speed if sprinting else walk_speed
+	var speed := (sprint_speed if sprinting else walk_speed) * (1.0 + 0.1 * Game.rank("fuesse"))
 	var target := dir * speed
 	var a := accel if is_on_floor() else air_accel
 	velocity.x = move_toward(velocity.x, target.x, a * speed * delta)

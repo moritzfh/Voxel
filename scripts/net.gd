@@ -9,6 +9,7 @@ signal chat_received(from_name: String, text: String, color: Color)
 signal player_state(id: int, state: Dictionary)
 signal player_left(id: int)
 signal lan_list_changed
+signal player_joined(id: int)   # host only: a new player registered (send them the world)
 
 const PORT := 7777
 const DISCOVERY_PORT := 7778
@@ -347,6 +348,7 @@ func _register(name: String) -> void:
 	players[id] = {"name": _clean_name(name), "color": c}
 	_roster.rpc(players)
 	roster_changed.emit()
+	player_joined.emit(id)
 	var msg := "%s ist beigetreten." % players[id]["name"]
 	_chat_msg.rpc("", msg)
 	chat_received.emit("", msg, Color(0.8, 0.8, 0.8))
@@ -397,3 +399,22 @@ func _exit_tree() -> void:
 		_upnp_thread.wait_to_finish()
 	if _upnp:
 		_upnp.delete_port_mapping(PORT, "UDP")
+
+# ------------------------------------------------------------------ world edits
+signal op_received(from_id: int, op: Dictionary)
+
+func send_op(op: Dictionary) -> void:
+	if not active():
+		return
+	_op.rpc(op)
+
+func send_op_to(id: int, op: Dictionary) -> void:
+	if active():
+		_op.rpc_id(id, op)
+
+@rpc("any_peer", "reliable")
+func _op(op: Dictionary) -> void:
+	var id := multiplayer.get_remote_sender_id()
+	if id == my_id():
+		return
+	op_received.emit(id, op)

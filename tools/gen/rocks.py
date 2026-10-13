@@ -78,7 +78,8 @@ def build_rock_meshes(blocks, writer):
         lods = []
         for f in (1, 2, 4):
             vv = v if f == 1 else models.downsample(v, f)
-            arr = models.mesh_model(vv, None, PV * f, origin=org, paint_vs=PV, detail=(f == 1), use_ao=(f < 4))
+            arr = models.mesh_model(vv, None, PV * f, origin=org, paint_vs=PV, detail=(f == 1), use_ao=(f < 4),
+                                    register=('rock_' + name) if f == 1 else None)
             if arr is None:          # tiny pebble vanished at this LOD: keep the previous mesh
                 lods.append(lods[-1])
                 continue
@@ -208,9 +209,7 @@ def scatter_rocks(grids, manifest, writer, blocks, nogo):
         i0, i1 = int((x - rx - g.origin[0]) / g.vs), int((x + rx - g.origin[0]) / g.vs) + 1
         k0, k1 = int((z - rz - g.origin[2]) / g.vs), int((z + rz - g.origin[2]) / g.vs) + 1
         mask[max(0, i0):max(0, i1), max(0, k0):max(0, k1)] = True
-        if sx * sc > 0.9 and sy * sc > 0.35:
-            cols.append([float(x), float(y + sy * sc * 0.5), float(z), float(sx * sc * 0.85), float(sy * sc), float(sz * sc * 0.85), float(yaw)])
-    manifest.setdefault('colliders', []).extend(cols)
+    # every rock gets a pick collider (mining); big ones also block the player
     # chunked instance export
     CH = 16.0
     out = {'meshes': meshes, 'chunks': [],
@@ -225,9 +224,15 @@ def scatter_rocks(grids, manifest, writer, blocks, nogo):
             m = keys == key
             bb = a[m]
             buf = xform_rows(bb[:, 0], bb[:, 1], bb[:, 2], bb[:, 3], bb[:, 4])
+            cxm, czm = float(bb[:, 0].mean()), float(bb[:, 2].mean())
             out['chunks'].append({'mesh': name, 'n': int(m.sum()), 'buf': writer.put(buf),
-                                  'center': [float(bb[:, 0].mean()), float(bb[:, 2].mean())],
+                                  'center': [cxm, czm],
                                   'range': 70.0 if name.startswith('pebble') else 160.0})
+            prefix = 'rocks_%s_%d_%d' % (name, int(cxm), int(czm))
+            sx, sy, sz = sizes[name]
+            for i, (x, y, z, yaw, sc) in enumerate(bb.tolist()):
+                block = (not name.startswith('pebble')) and sx * sc > 0.9 and sy * sc > 0.35
+                out.setdefault('items', []).append([x, y, z, yaw, sc, name, prefix, i, sx * sc, sy * sc, sz * sc, block])
     manifest['rocks_inst'] = out
     print(f'rocks: {len(placed)} placed ({sum(1 for p in placed if p[0].startswith("pebble"))} pebbles), '
           f'{len(cols)} colliders in {time.time() - t0:.1f}s')

@@ -12,6 +12,8 @@ config/icon="res://assets/ui/icon.png"
 [autoload]
 
 Net="*res://scripts/net.gd"
+Game="*res://scripts/game/game_state.gd"
+Sfx="*res://scripts/game/sfx.gd"
 
 [display]
 

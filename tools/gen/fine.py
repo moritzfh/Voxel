@@ -49,7 +49,7 @@ MID = Spec('mid', 0.5, 64, 4, [(0.0, 170.0), (170.0, 420.0), (420.0, 0.0)], 0, 2
 
 # ------------------------------------------------------------------ numba kernels
 @njit(cache=True)
-def fill_natural(ids, ti, surf, sub, wtop, fall, snowy, y0, gx0, gz0, grass_depth, dirt_depth, fuzz):
+def fill_natural(ids, ti, surf, sub, wtop, fall, snowy, y0, gx0, gz0, grass_depth, dirt_depth, fuzz, ores):
     """ids[x, y, z] (local), per local column: top index ti, surface id, sub-surface id, water top, cascade flag,
     snowy = index above which exposed rock gets snow patches. y0 = global index of ids[:, 0]."""
     X, Y, Z = ids.shape
@@ -80,6 +80,14 @@ def fill_natural(ids, ti, surf, sub, wtop, fall, snowy, y0, gx0, gz0, grass_dept
                     # snow clinging to high rock faces
                     if VX.vnoise3(gx0 + i, y0 + j, gz0 + k, 6, 77) > 0.55:
                         m = C.SNOW
+                if ores and m == C.STONE:
+                    # ore veins: copper near the top of the rock, iron deeper, crystal pockets deepest
+                    if d > 26 and VX.vnoise3(gx0 + i, y0 + j, gz0 + k, 6, 303) > 0.83:
+                        m = VX.CRYSTAL
+                    elif d > 14 and VX.vnoise3(gx0 + i, y0 + j, gz0 + k, 9, 302) > 0.79:
+                        m = VX.ORE_IRON
+                    elif d > 6 and VX.vnoise3(gx0 + i, y0 + j, gz0 + k, 8, 301) > 0.76:
+                        m = VX.ORE_COPPER
                 ids[i, j, k] = m
             if fuzz and 0 <= t + 1 < Y:
                 h = VX.hfrac(gx0 + i, ti[i, k], gz0 + k, 901)
@@ -375,10 +383,28 @@ def chunk_ids(g, sp, fd, stop, cx, cz):
     CY = (y_hi - y_lo + 3) // 4 * 4
     ids = np.zeros((CH + 2 * PAD, CY, CH + 2 * PAD), np.uint8)
     fill_natural(ids, tsub, fd['surf'][a0:a1, b0:b1], fd['sub'][a0:a1, b0:b1], wsub, fd['fall'][a0:a1, b0:b1],
-                 fd['snowy'][a0:a1, b0:b1], y_lo, cx - PAD, cz - PAD, sp.grass_depth, sp.dirt_depth, sp.fuzz)
+                 fd['snowy'][a0:a1, b0:b1], y_lo, cx - PAD, cz - PAD, sp.grass_depth, sp.dirt_depth, sp.fuzz, sp.collision)
     if smax >= 0:
         upsample_struct(ids, g.vox, STRUCT_IDS, cx - PAD, y_lo, cz - PAD, F)
+    for (fx, fy, fz, grid) in fd.get('features', ()):
+        _stamp(ids, grid, fx - (cx - PAD), fy - y_lo, fz - (cz - PAD))
     return ids, y_lo
+
+
+def _stamp(ids, grid, ox, oy, oz):
+    X, Y, Z = ids.shape
+    gx, gy, gz = grid.shape
+    x0, x1 = max(0, ox), min(X, ox + gx)
+    y0, y1 = max(0, oy), min(Y, oy + gy)
+    z0, z1 = max(0, oz), min(Z, oz + gz)
+    if x1 <= x0 or y1 <= y0 or z1 <= z0:
+        return
+    sub = grid[x0 - ox:x1 - ox, y0 - oy:y1 - oy, z0 - oz:z1 - oz]
+    dst = ids[x0:x1, y0:y1, z0:z1]
+    m = sub > 0
+    dst[m] = sub[m]
+    clear = sub == 254          # 254 = carve to air (treasure pit fill stays soil)
+    dst[clear] = 0
 
 
 def mesh_level(ids, gx0, gy0, gz0, vs, pad, n, tables, wt, origin, use_ao=True):
@@ -420,12 +446,124 @@ def build_chunk(g, sp, fd, stop, cx, cz, tables, wt, levels=(0, 1, 2)):
     return res, (cxw, czw), ids, y_lo
 
 
+VOX_OUT = None   # path of the runtime voxel data file (near chunks), set by world.py
+
+
+def _rune_grid(rng):
+    """Standing rune stone (6 x 18 x 5 voxels, 2 below ground) with glowing crystal glyphs."""
+    W, H, D = 6, 18, 5
+    v = np.zeros((W, H, D), np.uint8)
+    for j in range(H):
+        t = max(0, j - 2) / (H - 2)
+        inset = 1 if t > 0.82 else 0
+        v[inset:W - inset, j, (1 if t > 0.9 else 0):D - (1 if t > 0.9 else 0)] = C.STONE
+    v[0, H - 1, :] = 0
+    v[W - 1, H - 2:, 0] = 0
+    # glyphs on both broad faces
+    glyph = rng.integers(0, 3)
+    for z in (0, D - 1):
+        for j in range(5, H - 3):
+            if glyph == 0 and (j % 4 != 0):
+                v[2, j, z] = VX.CRYSTAL
+            elif glyph == 1 and ((j - 5) % 5 in (0, 1, 2)):
+                v[2 + (j % 2), j, z] = VX.CRYSTAL
+            elif glyph == 2 and j % 3 != 1:
+                v[1 + (j // 3) % 4, j, z] = VX.CRYSTAL
+        v[2:4, H - 4, z] = VX.CRYSTAL
+    # mossy rubble at the foot
+    for a in range(-2, W + 2):
+        for c in range(-2, D + 2):
+            pass
+    return v
+
+
+def _treasure_grid(depth):
+    """Buried chest (6 x 4 x 4) 'depth' voxels below the surface plus a pebble X on top. Origin = surface-relative."""
+    W, D = 7, 7
+    H = depth + 5
+    v = np.zeros((W, H, D), np.uint8)
+    chest = np.full((6, 4, 4), C.CRATE, np.uint8)
+    chest[:, 3, :] = C.PLANKS_DARK
+    chest[0, :, :] = VX.GOLD
+    chest[5, :, :] = VX.GOLD
+    chest[:, 2, 0] = VX.GOLD
+    v[0:6, 0:4, 1:5] = chest
+    # pebble X marks the spot (one voxel above the surface)
+    for k in range(7):
+        v[k, H - 1, k] = C.PEBBLE
+        v[6 - k, H - 1, k] = C.PEBBLE
+    return v
+
+
+def make_features(g, fd, sp, manifest):
+    """Rune stones and buried treasure for exploring (near area only)."""
+    rng = np.random.default_rng(2024)
+    ti, surf, mod, wtop = fd['ti'], fd['surf'], fd['mod'], fd['wtop']
+    PAD, FS = sp.PAD, sp.FS
+    nx, nz = fd['nx'], fd['nz']
+    cands = []
+    for gx in range(64, nx - 64, 12):
+        for gz in range(64, nz - 64, 12):
+            a, b = gx + PAD, gz + PAD
+            if mod[a - 8:a + 9, b - 8:b + 9].any() or (wtop[a - 16:a + 17, b - 16:b + 17] > -999).any():
+                continue
+            if surf[a, b] != C.GRASS:
+                continue
+            win = ti[a - 4:a + 5, b - 4:b + 5]
+            if win.max() - win.min() > 5:
+                continue
+            x = g.origin[0] + (gx + 0.5) * FS
+            z = g.origin[2] + (gz + 0.5) * FS
+            if np.hypot(x + 12, z + 32) < 30 or np.hypot(x, z) < 14:
+                continue
+            pd, phw = T.path_field(np.array([x]), np.array([z]))
+            if pd[0] < phw[0] + 2.0:
+                continue
+            cands.append((gx, gz, x, z))
+    order = rng.permutation(len(cands))
+    runes, treasures = [], []
+    for i in order:
+        gx, gz, x, z = cands[i]
+        if len(runes) < 8 and all(np.hypot(x - r[0], z - r[2]) > 30 for r in runes):
+            runes.append((x, gx, z, gz))
+        elif len(treasures) < 6 and all(np.hypot(x - r[0], z - r[2]) > 14 for r in runes) and \
+                all(np.hypot(x - t_[0], z - t_[2]) > 22 for t_ in treasures):
+            treasures.append((x, gx, z, gz))
+    feats = []
+    mk = manifest.setdefault('markers', {})
+    mk['runes'] = []
+    mk['treasures'] = []
+    cols = manifest.setdefault('colliders', [])
+    for (x, gx, z, gz) in runes:
+        grid = _rune_grid(rng)
+        top = int(ti[gx + PAD, gz + PAD])
+        fx, fz = gx - 3, gz - 2
+        feats.append((fx, top - 1, fz, grid))
+        wy = Y0 + (top + 1) * FS
+        mk['runes'].append([float(x), float(wy), float(z)])
+        cols.append([float(x), float(wy + 1.0), float(z), 0.75, 2.0, 0.62, 0.0])
+    for (x, gx, z, gz) in treasures:
+        depth = int(rng.integers(8, 13))
+        grid = _treasure_grid(depth)
+        top = int(ti[gx + PAD, gz + PAD])
+        fx, fz = gx - 3, gz - 3
+        feats.append((fx, top + 2 - grid.shape[1], fz, grid))
+        wy = Y0 + (top + 2 - grid.shape[1] + 2) * FS
+        mk['treasures'].append([float(x), float(wy), float(z)])
+    print(f'[{sp.key}] features: {len(runes)} runes, {len(treasures)} treasures')
+    return feats
+
+
 def build_columns(g, sp, manifest, writer, holes=()):
+    import zlib
     t0 = time.time()
     fd = fine_fields(g, sp, holes)
+    if sp.collision:
+        fd['features'] = make_features(g, fd, sp, manifest)
     ti = fd['ti']
     nx, nz = fd['nx'], fd['nz']
     FS, CH, PAD = sp.FS, sp.CH, sp.PAD
+    F = fd['F']
     tables = VX.mesher_tables()
     wt = dict(tables)
     wt['occ_water'] = tables['occluder'] | tables['water']
@@ -433,12 +571,20 @@ def build_columns(g, sp, manifest, writer, holes=()):
     entries = []
     nq = [0, 0, 0]
     nwq = 0
+    if sp.collision:
+        sv = np.where(STRUCT_IDS[g.vox], g.vox, 0).astype(np.uint8)
+        ssolid = STRUCT_IDS.copy()
+        socc = STRUCT_IDS.copy()
+    vox_f = open(VOX_OUT, 'wb') if (sp.collision and VOX_OUT) else None
+    vox_index = []
+    vox_off = 0
+    raw_total = 0
     for cx in range(0, nx, CH):
         for cz in range(0, nz, CH):
             r = build_chunk(g, sp, fd, stop, cx, cz, tables, wt)
             if r is None:
                 continue
-            res, (cxw, czw), _, _ = r
+            res, (cxw, czw), ids, y_lo = r
             ent = {'cx': cx, 'cz': cz, 'center': [cxw, czw], 'lods': []}
             for lvl, rr in enumerate(res):
                 e = {}
@@ -460,22 +606,30 @@ def build_columns(g, sp, manifest, writer, holes=()):
                 ent['hm'] = writer.put(np.ascontiguousarray(hm.T).astype(np.float32))  # rows = z
                 ent['hm_size'] = CH + 1
                 ent['hm_center'] = [cxw, float(Y0), czw]
-            entries.append(ent)
-    cols = []
-    if sp.collision:
-        # building collision: coarse trimesh of structure voxels only
-        sv = np.where(STRUCT_IDS[g.vox], g.vox, 0).astype(np.uint8)
-        solid = STRUCT_IDS.copy()
-        occ = STRUCT_IDS.copy()
-        for cx in range(0, g.dims[0], 64):
-            for cz in range(0, g.dims[2], 64):
-                col = mesher.mesh_collision(sv, solid, occ, g.vs, g.origin, cx, min(g.dims[0], cx + 64), cz,
-                                            min(g.dims[2], cz + 64))
+                # coarse building collision for this chunk only (replaced by exact voxels when the chunk goes live)
+                ci0, ci1 = cx // F, min(g.dims[0], (cx + CH) // F)
+                ck0, ck1 = cz // F, min(g.dims[2], (cz + CH) // F)
+                col = mesher.mesh_collision(sv, ssolid, socc, g.vs, g.origin, ci0, ci1, ck0, ck1)
                 if col is not None:
                     tri = col['pos'][col['idx']].astype(np.float32)
-                    cols.append({'col': writer.put(tri), 'n': int(len(tri))})
+                    ent['scol'] = writer.put(tri)
+                if vox_f is not None:
+                    enc = VX.paint_grid(ids, cx - PAD, y_lo, cz - PAD, FS, True)
+                    inner = np.ascontiguousarray(enc[PAD:PAD + CH, :, PAD:PAD + CH])
+                    comp = zlib.compress(inner.tobytes(), 6)
+                    vox_f.write(comp)
+                    vox_index.append({'ix': cx // CH, 'iz': cz // CH, 'y_lo': int(y_lo), 'cy': int(inner.shape[1]),
+                                      'off': vox_off, 'size': len(comp), 'raw': int(inner.size)})
+                    vox_off += len(comp)
+                    raw_total += inner.size
+            entries.append(ent)
+    if vox_f is not None:
+        vox_f.close()
+        manifest['near_vox'] = {'chunks': vox_index, 'cs': CH, 'vs': FS,
+                                'origin': [float(g.origin[0]), Y0, float(g.origin[2])]}
+        print(f'[{sp.key}] voxel data: {raw_total / 1e6:.0f} MB raw -> {vox_off / 1e6:.1f} MB compressed')
     manifest[sp.key] = {'vs': FS, 'origin': [float(g.origin[0]), Y0, float(g.origin[2])], 'chunks': entries,
-                        'struct_col': cols, 'fine': True}
+                        'struct_col': [], 'fine': True}
     # surface data for scatter (strip padding)
     g.fine_vs = FS
     g.fine_top_h = np.where(fd['hole'], np.nan, Y0 + (ti + 1) * FS)[PAD:-PAD, PAD:-PAD].astype(np.float32)
@@ -483,8 +637,7 @@ def build_columns(g, sp, manifest, writer, holes=()):
     g.fine_mod = fd['mod'][PAD:-PAD, PAD:-PAD]
     w = fd['wtop'][PAD:-PAD, PAD:-PAD]
     g.fine_water_h = np.where(w > -999, Y0 + (w + 1) * FS, -100.0).astype(np.float32)
-    print(f'[{sp.key}] {len(entries)} chunks, quads per LOD {nq} (+{nwq} water), '
-          f'{len(cols)} collision chunks in {time.time() - t0:.1f}s')
+    print(f'[{sp.key}] {len(entries)} chunks, quads per LOD {nq} (+{nwq} water) in {time.time() - t0:.1f}s')
 
 
 def build_near(g, manifest, writer):
