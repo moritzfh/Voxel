@@ -1,5 +1,12 @@
 # Grünweiten – Voxel-Abenteuer und Bauen
 
+**Mehrspieler-Beitritt korrigiert:** Freundescode und IP laden vom Hauptmenü automatisch
+die Host-Welt. Der MQTT-Adapter liest Absender, Kanal und Übertragungsmodus vom nächsten
+Paket, wie SceneMultiplayer es erwartet. Ein eigener Einzelspielerstand wird vor einem
+Weltwechsel gespeichert. Sitzungskennung und wiederholbare Weltanfragen verhindern
+falsche Karten und doppelte Ladevorgänge. Host-Abbruch bringt Gäste auch während des
+Ladens ins Hauptmenü. Menü-/Transporttests laufen mit einem lokalen MQTT-WebSocket-Broker.
+
 **Neue Naturwelten:** Wiesen, Wälder, Seen und große Gebirge entstehen gemeinsam,
 mit unterschiedlich großen Gebieten, breiten Übergängen, Baumgruppen und Lichtungen.
 Seerosen und Steine beleben Gewässer; Bäume wachsen nur auf trockenem Boden.

@@ -71,13 +71,14 @@ func _get_packet_script() -> PackedByteArray:
 	return _cur["data"]
 
 func _get_packet_peer() -> int:
-	return int(_cur.get("from", 0))
+	# SceneMultiplayer reads the metadata BEFORE consuming the next packet.
+	return int(_queue[0].get("from",0)) if not _queue.is_empty() else 0
 
 func _get_packet_mode() -> MultiplayerPeer.TransferMode:
-	return int(_cur.get("mode", MultiplayerPeer.TRANSFER_MODE_RELIABLE)) as MultiplayerPeer.TransferMode
+	return int(_queue[0].get("mode",MultiplayerPeer.TRANSFER_MODE_RELIABLE) if not _queue.is_empty() else MultiplayerPeer.TRANSFER_MODE_RELIABLE) as MultiplayerPeer.TransferMode
 
 func _get_packet_channel() -> int:
-	return int(_cur.get("channel", 0))
+	return int(_queue[0].get("channel",0)) if not _queue.is_empty() else 0
 
 func _put_packet_script(buffer: PackedByteArray) -> Error:
 	if _status != MultiplayerPeer.CONNECTION_CONNECTED:
@@ -150,6 +151,7 @@ func _close() -> void:
 		else:
 			_publish(_base + "/p/1", _header(KIND_BYE))
 		_ws.send(PackedByteArray([0xE0, 0x00]))
+		_ws.poll()
 	_ws.close()
 	_queue.clear()
 	var ids := _peers.keys()

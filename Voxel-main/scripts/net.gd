@@ -40,9 +40,24 @@ var _upnp_thread: Thread
 var _join_timeout := 0.0
 var world_loading := false
 var _pending_world_ops: Array = []
+var waiting_for_world := false
+var session_id := ""
+var menu_notice := ""
+var _world_wait := 0.0
+var _world_request_timer := 0.0
+var _ending_remote := false
+var _closing_session := false
+var direct_launch_consumed := false
+var _leaving := false
+
+func joining() -> bool:
+	return waiting_for_world or world_loading
 
 func finish_world_loading() -> void:
+	if not Worlds.remote or not active(): return
 	world_loading = false
+	waiting_for_world = false
+	_set_status("Gemeinsame Welt geladen.")
 	var pending := _pending_world_ops.duplicate()
 	_pending_world_ops.clear()
 	for entry in pending: op_received.emit(entry[0],entry[1])
@@ -50,20 +65,71 @@ func finish_world_loading() -> void:
 func _receive_world_offer(op: Dictionary) -> void:
 	var descriptor: Variant = op.get("descriptor",{})
 	if not descriptor is Dictionary or int(descriptor.get("version",0)) not in [0,1,2]: return
+	var offered_session := str(op.get("session",""))
+	var was_remote := Worlds.remote
+	# Retries can arrive while the scene is being generated. Never restart that load.
+	if world_loading and session_id==offered_session and Worlds.config==descriptor: return
+	var current := get_tree().current_scene
+	var reuse: bool = was_remote and current!=null and current.get("world_ready")==true and current.world_data.get("descriptor",{}).get("id","")==descriptor.get("id","") and str(current.get_meta("host_session",""))==offered_session
+	# Save the solo world with its own descriptor before replacing global world identity.
+	if not was_remote and current and current.get("world_ready")==true and current.has_method("_save"):
+		current._save()
+	session_id = offered_session
+	waiting_for_world = false
+	_world_wait = 0.0
 	Worlds.config = descriptor.duplicate(true)
 	Worlds.remote = true
 	Worlds.continuing = false
 	Worlds.join_spawn = op.get("spawn",[0,2,0])
 	Settings.session_mode = "guest"
-	var current := get_tree().current_scene
-	if current and current.get("world_ready")==true and current.world_data.get("descriptor",{}).get("id","")==descriptor.get("id",""):
+	if reuse:
 		current.accept_world_rule(bool(op.get("rule",false)))
 		send_op_to(1,{"op":"world_ready"})
+		_set_status("Gemeinsame Welt geladen.")
 		return
 	world_loading = true
+	if current and current.get("world_ready")!=null:
+		current.world_ready = false
+		if current.get("player"): current.player.set_physics_process(false)
+	_set_status("Host-Welt wird geladen …")
 	Game.reset()
 	get_tree().paused = false
-	get_tree().call_deferred("change_scene_to_file","res://scenes/main.tscn")
+	call_deferred("_enter_remote_world",offered_session)
+
+func _enter_remote_world(offered_session: String) -> void:
+	if not world_loading or not active() or session_id!=offered_session: return
+	get_tree().change_scene_to_file("res://scenes/main.tscn")
+
+func _remote_session_ended(reason: String) -> void:
+	if _ending_remote: return
+	_ending_remote = true
+	var current := get_tree().current_scene
+	if not Worlds.remote and current and current.get("world_ready")==true and current.has_method("_save"):
+		current._save()
+	leave(true)
+	_ending_remote = true
+	Worlds.test_map()
+	Settings.session_mode = "single"
+	Game.reset()
+	menu_notice = reason
+	_set_status(reason)
+	get_tree().paused = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if current and current.get("world_ready")!=null:
+		current.world_ready = false
+		if current.get("player"): current.player.set_physics_process(false)
+	get_tree().call_deferred("change_scene_to_file","res://scenes/menu.tscn")
+
+func end_session() -> void:
+	if _closing_session: return
+	_closing_session = true
+	if is_host():
+		send_op({"op":"world_closed","session":session_id})
+	elif active() and Worlds.remote:
+		send_op_to(1,{"op":"guest_leaving"})
+	if active(): await get_tree().create_timer(.25,true).timeout
+	leave(true)
+	_closing_session = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -115,6 +181,7 @@ func host(name: String, local_test := false) -> bool:
 		_set_status("Hosten fehlgeschlagen (Port %d belegt?)" % PORT)
 		return false
 	multiplayer.multiplayer_peer = _peer
+	session_id = "%d_%d" % [Time.get_unix_time_from_system(),randi()]
 	players = {1: {"name": player_name, "color": 0}}
 	roster_changed.emit()
 	if not local_test:
@@ -142,6 +209,9 @@ func join(address: String, name: String) -> bool:
 		_set_status("Verbindung fehlgeschlagen.")
 		return false
 	multiplayer.multiplayer_peer = _peer
+	waiting_for_world = true
+	_world_wait = 45.0
+	_world_request_timer = 0.0
 	# generous timeouts: a hitch while loading or compiling shaders must not drop the connection
 	(_peer as ENetMultiplayerPeer).get_peer(1).set_timeout(32, 20000, 45000)
 	_join_timeout = 25.0
@@ -161,6 +231,7 @@ func host_online(name: String, broker_idx := 0) -> bool:
 		c += CODE_CHARS[randi() % CODE_CHARS.length()]
 	c += CODE_CHARS[_broker_idx]
 	_start_mqtt(c, true)
+	session_id = "%d_%d" % [Time.get_unix_time_from_system(),randi()]
 	players = {1: {"name": player_name, "color": 0}}
 	roster_changed.emit()
 	_set_status("Verbinde mit dem Vermittlungsdienst …")
@@ -174,6 +245,9 @@ func join_code(c: String, name: String) -> bool:
 		_set_status("Der Code hat 6 Zeichen.")
 		return false
 	_broker_idx = maxi(0, CODE_CHARS.find(c[5])) % BROKERS.size()
+	waiting_for_world = true
+	_world_wait = 45.0
+	_world_request_timer = 0.0
 	_start_mqtt(c, false)
 	_set_status("Suche Spiel %s …" % c)
 	return true
@@ -214,7 +288,13 @@ func _on_raw(from: int, data: PackedByteArray) -> void:
 		player_state.emit(from, {"pos": v[0], "yaw": v[1], "vel": v[2], "flags": v[3], "attack": v[4]})
 
 func leave(silent := false) -> void:
+	_leaving = true
+	var remote_world := Worlds.remote and not silent
 	world_loading = false
+	waiting_for_world = false
+	_world_wait = 0.0
+	session_id = ""
+	_ending_remote = false
 	_pending_world_ops.clear()
 	_stop_broadcast()
 	if _upnp_thread:
@@ -237,6 +317,8 @@ func leave(silent := false) -> void:
 	roster_changed.emit()
 	if not silent:
 		_set_status("Getrennt.")
+	if remote_world: call_deferred("_remote_session_ended","Du hast die gemeinsame Welt verlassen.")
+	_leaving = false
 
 func _clean_name(n: String) -> String:
 	n = n.strip_edges().replace("\n", " ")
@@ -309,6 +391,14 @@ func stop_lan_search() -> void:
 	lan_hosts.clear()
 
 func _process(delta: float) -> void:
+	if waiting_for_world:
+		_world_wait -= minf(delta,.25)
+		_world_request_timer -= delta
+		if active() and _world_request_timer<=0:
+			_world_request_timer = 2.0
+			send_op_to(1,{"op":"world_request"})
+		if _world_wait<=0:
+			call_deferred("_remote_session_ended","Der Host hat keine Welt gesendet. Bitte erneut beitreten.")
 	if _bcast and is_host():
 		_bcast_t -= delta
 		if _bcast_t <= 0.0:
@@ -357,7 +447,7 @@ func _on_peer_disconnected(id: int) -> void:
 
 func _on_connected() -> void:
 	_join_timeout = 0.0
-	_set_status("Verbunden.")
+	_set_status("Verbunden – Host-Welt wird angefordert …")
 	_register.rpc_id(1, player_name)
 
 func _on_failed() -> void:
@@ -366,9 +456,14 @@ func _on_failed() -> void:
 	_set_status(why if why != "" else "Verbindung fehlgeschlagen.")
 
 func _on_server_gone() -> void:
-	leave(true)
-	_set_status("Der Host hat das Spiel beendet.")
-	chat_received.emit("", "Verbindung zum Server getrennt.", Color(1, 0.6, 0.5))
+	if _leaving or _closing_session: return
+	if not Worlds.remote and not waiting_for_world and not world_loading:
+		leave(true)
+		_set_status("Mehrspieler-Verbindung getrennt. Deine Welt bleibt im Einzelspieler geöffnet.")
+		return
+	world_loading = false
+	waiting_for_world = false
+	call_deferred("_remote_session_ended","Der Host hat die Welt verlassen oder die Verbindung wurde getrennt.")
 
 # ------------------------------------------------------------------ RPCs
 @rpc("any_peer", "reliable")
@@ -376,6 +471,10 @@ func _register(name: String) -> void:
 	if not is_host():
 		return
 	var id := multiplayer.get_remote_sender_id()
+	if players.has(id):
+		_roster.rpc_id(id,players)
+		player_joined.emit(id)
+		return
 	var used := {}
 	for p in players.values():
 		used[int(p["color"])] = true
@@ -403,7 +502,7 @@ func _roster(p: Dictionary) -> void:
 
 ## own hero state -> everybody (the host relays client packets)
 func send_state(pos: Vector3, yaw: float, vel: Vector3, flags: int, attack_n: int) -> void:
-	if not active():
+	if not active() or joining():
 		return
 	if is_online_mode():
 		_peer.send_raw_all(var_to_bytes([pos, yaw, vel, flags, attack_n]))
@@ -453,6 +552,18 @@ func send_op_to(id: int, op: Dictionary) -> void:
 func _op(op: Dictionary) -> void:
 	var id := multiplayer.get_remote_sender_id()
 	if id == my_id():
+		return
+	if op.get("op","")=="world_closed":
+		if id==1 and not is_host() and str(op.get("session",""))==session_id:
+			world_loading = false
+			waiting_for_world = false
+			call_deferred("_remote_session_ended","Der Host hat die Welt verlassen.")
+		return
+	if op.get("op","")=="world_request":
+		if is_host() and players.has(id): player_joined.emit(id)
+		return
+	if op.get("op","")=="guest_leaving":
+		if is_host() and players.has(id): _peer.disconnect_peer(id)
 		return
 	if op.get("op","")=="world_offer":
 		if id==1 and not is_host(): _receive_world_offer(op)

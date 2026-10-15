@@ -230,6 +230,7 @@ func _ready() -> void:
 		player.set_physics_process(true)
 	if loading: loading.queue_free()
 	world_ready = true
+	if Worlds.remote: set_meta("host_session",Net.session_id)
 	if _mp_test>0:
 		print("[world] seed=%s version=%d streamed=%s voxel=%s remote=%s" % [Worlds.config.get("seed_text","Testmap"),Worlds.config.get("version",0),world_data.get("streamed",false),vworld.vs,Worlds.remote])
 	if Worlds.remote:
@@ -833,14 +834,14 @@ func _offer_world(id: int) -> void:
 	if world_data.get("streamed",false):
 		generator.remote_interests[id] = at
 		generator._retarget()
-	Net.send_op_to(id,{"op":"world_offer","descriptor":Worlds.config.duplicate(true),"spawn":[at.x,at.y,at.z],"rule":world_features_enabled()})
+	Net.send_op_to(id,{"op":"world_offer","session":Net.session_id,"descriptor":Worlds.config.duplicate(true),"spawn":[at.x,at.y,at.z],"rule":world_features_enabled()})
 
 func _profile() -> Dictionary:
 	return {"pos":[player.position.x,player.position.y,player.position.z],"game":Game.to_dict(),"hp":player.hp,"mana":player.mana,"food":player.food,"potions":player.potions,"crates":crates_found,"elder":elder_talked}
 
 func _quit_game() -> void:
 	if world_ready: _save()
-	if Net.active(): await get_tree().create_timer(.2,true).timeout
+	await Net.end_session()
 	get_tree().quit()
 
 func _restore_profile(profile: Dictionary) -> void:

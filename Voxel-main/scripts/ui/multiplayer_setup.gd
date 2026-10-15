@@ -4,6 +4,8 @@ const K := preload("res://scripts/ui/ui_kit.gd")
 var address: LineEdit
 var player_name: LineEdit
 var status: Label
+var join_button: Button
+var host_button: Button
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -23,16 +25,16 @@ func _ready() -> void:
 	player_name = _edit(column,"Dein Name")
 	player_name.text = Net.player_name
 	player_name.max_length = 16
-	_button(column,"Neue oder gespeicherte Welt hosten",func(): Net.player_name = player_name.text; host_requested.emit(); queue_free())
+	host_button = _button(column,"Neue oder gespeicherte Welt hosten",func(): Net.player_name = player_name.text; host_requested.emit(); queue_free())
 	column.add_child(K.label("Einem Freund beitreten",K.F_HEAD,31,K.GOLD))
 	address = _edit(column,"Freundescode oder IP, z. B. K7P2QA / 192.168.0.23")
 	address.text_submitted.connect(func(_value: String): join())
-	_button(column,"Beitreten",join)
+	join_button = _button(column,"Beitreten",join)
 	status = K.label("",K.F_BODY,22,K.GOLD)
 	status.custom_minimum_size.y = 60
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	column.add_child(status)
-	Net.status_changed.connect(func(text: String): status.text = text)
+	Net.status_changed.connect(_status_changed)
 	_button(column,"Zurück",func(): Net.leave(); queue_free())
 	address.grab_focus()
 
@@ -45,7 +47,7 @@ func _edit(parent: Node,hint: String) -> LineEdit:
 	parent.add_child(field)
 	return field
 
-func _button(parent: Node,title: String,action: Callable) -> void:
+func _button(parent: Node,title: String,action: Callable) -> Button:
 	var button := Button.new()
 	button.text = title
 	button.custom_minimum_size.y = 62
@@ -53,8 +55,17 @@ func _button(parent: Node,title: String,action: Callable) -> void:
 	button.focus_mode = Control.FOCUS_ALL
 	button.pressed.connect(action)
 	parent.add_child(button)
+	return button
+
+func _status_changed(text: String) -> void:
+	status.text = text
+	join_button.disabled = Net.joining()
+	host_button.disabled = Net.joining()
+	address.editable = not Net.joining()
+	player_name.editable = not Net.joining()
 
 func join() -> void:
+	if Net.joining(): return
 	var value := address.text.strip_edges()
 	if value.contains(".") or value.contains(":"): Net.join(value,player_name.text)
 	else: Net.join_code(value,player_name.text)

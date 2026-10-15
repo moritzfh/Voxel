@@ -16,7 +16,8 @@ func _ready() -> void:
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	# Existing command-line testing and direct multiplayer launches still enter the world.
-	if not OS.get_cmdline_user_args().is_empty() and not "--menu-test" in OS.get_cmdline_user_args():
+	if not Net.direct_launch_consumed and not OS.get_cmdline_user_args().is_empty() and not "--menu-test" in OS.get_cmdline_user_args():
+		Net.direct_launch_consumed = true
 		Worlds.test_map()
 		var generated := {}
 		var resume_generated := false
@@ -69,6 +70,10 @@ func _ready() -> void:
 	content.add_child(K.label("ENTDECKE. ERSCHAFFE. BLEIBE.", K.F_SC, 21, K.GOLD))
 	content.add_child(K.label("Grünweiten", K.F_TITLE, 72))
 	var sub := K.label("Dein Abenteuer beginnt mit einer eigenen Welt.", K.F_BODY, 24, K.CREAM_DIM)
+	if not Net.menu_notice.is_empty():
+		sub.text = Net.menu_notice
+		sub.modulate = K.GOLD
+		Net.menu_notice = ""
 	content.add_child(sub)
 	var gap := Control.new()
 	gap.custom_minimum_size.y = 48
@@ -102,7 +107,7 @@ func _button(text: String, callback: Callable) -> Button:
 	return button
 
 func _single(multiplayer_mode := false) -> void:
-	if busy:
+	if busy or Net.joining():
 		return
 	var creation := Control.new()
 	creation.set_script(CREATION)
@@ -112,19 +117,20 @@ func _single(multiplayer_mode := false) -> void:
 	add_child(creation)
 
 func _multiplayer() -> void:
+	if busy or Net.joining(): return
 	var lobby := Control.new()
 	lobby.set_script(load("res://scripts/ui/multiplayer_setup.gd"))
 	lobby.host_requested.connect(func(): _single(true))
 	add_child(lobby)
 
 func _test_map() -> void:
-	if busy: return
+	if busy or Net.joining(): return
 	var saved := FileAccess.file_exists("user://spielstand.dat") or FileAccess.file_exists("user://savegame.json")
 	Worlds.test_map(saved)
 	_start("continue" if saved else "test")
 
 func _start(mode: String) -> void:
-	if busy:
+	if busy or Net.joining():
 		return
 	if mode in ["test","multi"]: Worlds.test_map()
 	busy = true

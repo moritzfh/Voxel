@@ -789,8 +789,10 @@ func _build_mp_panel() -> void:
 			get_tree().paused = false
 			_refresh_mp(), p).add_theme_font_size_override("font_size", 16)
 	mp_leave = _mp_button("Trennen", Vector2(36, 604), 226, func():
-		Net.leave()
-		_refresh_mp(), p)
+		var guest := Worlds.remote
+		await Net.end_session()
+		if guest: Net._remote_session_ended("Du hast die gemeinsame Welt verlassen.")
+		else: _refresh_mp(), p)
 	_mp_button("Zurück", Vector2(278, 604), 226, func(): _show_mp(false), p)
 
 func _join_from_field() -> void:
@@ -1019,8 +1021,7 @@ func _refresh_key_labels() -> void:
 func _return_to_title() -> void:
 	# Keep a recoverable save before leaving a world through the menu.
 	save_requested.emit()
-	if Worlds.remote and Net.active(): await get_tree().create_timer(.2,true).timeout
-	Net.leave()
+	await Net.end_session()
 	Net.stop_lan_search()
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
